@@ -6,6 +6,7 @@
 import pdb
 
 import numpy as np
+import insightface
 from insightface.app.common import Face
 import cv2
 from .predictor import get_predictor
@@ -314,6 +315,8 @@ class FaceAnalysisModel:
             bbox = bboxes[i, 0:4]
             det_score = bboxes[i, 4]
             kps = kpss[i]
+            print(str(kps))
+            print(insightface.__version__)
             face = Face(bbox=bbox, kps=kps, det_score=det_score)
             self.estimate_face_pose(data[0], face)
             ret.append(face)

@@ -34,7 +34,7 @@ log = logging.getLogger("EngineBuilder")
 def load_plugins(logger: trt.Logger):
     # 加载插件库
     if platform.system().lower() == 'linux':
-        ctypes.CDLL("./checkpoints/liveportrait_onnx/libgrid_sample_3d_plugin.so", mode=ctypes.RTLD_GLOBAL)
+        ctypes.CDLL("/opt/grid-sample3d-trt-plugin/build/libgrid_sample_3d_plugin.so", mode=ctypes.RTLD_GLOBAL)
     else:
         ctypes.CDLL("./checkpoints/liveportrait_onnx/grid_sample_3d_plugin.dll", mode=ctypes.RTLD_GLOBAL, winmode=0)
     # 初始化TensorRT的插件库

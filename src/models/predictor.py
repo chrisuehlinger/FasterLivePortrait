@@ -45,7 +45,7 @@ class TensorRTPredictor:
         :param engine_path: The path to the serialized engine to load from disk.
         """
         if platform.system().lower() == 'linux':
-            ctypes.CDLL("./checkpoints/liveportrait_onnx/libgrid_sample_3d_plugin.so", mode=ctypes.RTLD_GLOBAL)
+            ctypes.CDLL("/opt/grid-sample3d-trt-plugin/build/libgrid_sample_3d_plugin.so", mode=ctypes.RTLD_GLOBAL)
         else:
             ctypes.CDLL("./checkpoints/liveportrait_onnx/grid_sample_3d_plugin.dll", mode=ctypes.RTLD_GLOBAL,
                         winmode=0)
