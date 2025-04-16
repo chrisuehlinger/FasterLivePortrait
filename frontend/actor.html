@@ -191,6 +191,32 @@
         let framesPerSecond = 0;
         let statsInterval;
         
+        // Performance metrics
+        let performanceMetrics = {
+            drawTime: [],
+            blobTime: [],
+            sendTime: [],
+            totalTime: [],
+            compressedSize: [],
+            blockedByNetwork: false,
+            pendingFrames: 0
+        };
+        const maxSamples = 30; // Store last 30 samples for averaging
+        
+        // Function to calculate average from array
+        function calculateAverage(array) {
+            if (array.length === 0) return 0;
+            return array.reduce((a, b) => a + b, 0) / array.length;
+        }
+        
+        // Function to add value to metrics array with max length
+        function addMetric(array, value) {
+            array.push(value);
+            if (array.length > maxSamples) {
+                array.shift();
+            }
+        }
+
         // Initialize camera devices list
         async function initializeCameras() {
             try {
@@ -203,6 +229,28 @@
                     option.value = device.deviceId;
                     option.text = device.label || `Camera ${cameraSelect.length + 1}`;
                     cameraSelect.appendChild(option);
+                });
+
+                // Add resolution presets that match our server target
+                const resolutionSelect = document.getElementById('resolutionSelect');
+                resolutionSelect.innerHTML = ''; // Clear existing options
+                
+                // Add options that match the server's target resolution (640x480)
+                const resolutions = [
+                    { value: "640x480", text: "640x480 (Standard, recommended)" },
+                    { value: "800x600", text: "800x600" },
+                    { value: "1280x720", text: "1280x720 (HD)" },
+                    { value: "1920x1080", text: "1920x1080 (Full HD)" }
+                ];
+                
+                resolutions.forEach(res => {
+                    const option = document.createElement('option');
+                    option.value = res.value;
+                    option.text = res.text;
+                    if (res.value === "640x480") {
+                        option.selected = true; // Set 640x480 as default
+                    }
+                    resolutionSelect.appendChild(option);
                 });
             } catch (error) {
                 console.error('Error enumerating devices:', error);
@@ -423,17 +471,57 @@
             
             // Throttle to target frame rate
             if (elapsed >= targetInterval) {
-                // Draw current video frame to canvas
+                // Start timing the entire process
+                const frameStartTime = performance.now();
+                
+                // Check if websocket buffer is getting full (backpressure)
+                if (websocket.bufferedAmount > 1024 * 1024) { // 1MB threshold
+                    performanceMetrics.blockedByNetwork = true;
+                    console.warn(`Network backpressure detected: ${(websocket.bufferedAmount / (1024 * 1024)).toFixed(2)}MB buffered`);
+                    // Schedule next frame and try again
+                    requestAnimationFrame(captureAndSendFrame);
+                    return;
+                }
+                
+                performanceMetrics.blockedByNetwork = false;
+                
+                // Measure draw time
+                const drawStartTime = performance.now();
                 canvasCtx.drawImage(localVideo, 0, 0, canvasElement.width, canvasElement.height);
+                const drawEndTime = performance.now();
+                addMetric(performanceMetrics.drawTime, drawEndTime - drawStartTime);
                 
                 // Convert canvas to JPEG blob with quality setting
+                const blobStartTime = performance.now();
+                const jpegQuality = 0.65; // Lower quality for better performance (was 0.7)
+                
+                // Track when blob conversion completes
                 canvasElement.toBlob((blob) => {
+                    const blobEndTime = performance.now();
+                    addMetric(performanceMetrics.blobTime, blobEndTime - blobStartTime);
+                    
                     if (blob && websocket && websocket.readyState === WebSocket.OPEN) {
+                        const sendStartTime = performance.now();
+                        
+                        // Track blob size
+                        addMetric(performanceMetrics.compressedSize, blob.size);
+                        
+                        // Send the blob
                         websocket.send(blob);
+                        
+                        // Measure send time
+                        const sendEndTime = performance.now();
+                        addMetric(performanceMetrics.sendTime, sendEndTime - sendStartTime);
+                        
+                        // Total time
+                        addMetric(performanceMetrics.totalTime, sendEndTime - frameStartTime);
+                        
+                        // Update stats
                         framesSent++;
                         bytesSent += blob.size;
+                        performanceMetrics.pendingFrames = websocket.bufferedAmount > 0 ? 1 : 0;
                     }
-                }, 'image/jpeg', 0.7);  // Adjust quality as needed (0.7 = 70% quality)
+                }, 'image/jpeg', jpegQuality);  // Lower quality for better performance
                 
                 lastFrameTime = now;
             }
@@ -457,6 +545,15 @@
             let prevBytesSent = 0;
             let prevTime = performance.now();
             
+            // Create detailed stats container
+            const detailedStatsContainer = document.createElement('div');
+            detailedStatsContainer.id = 'detailedStats';
+            detailedStatsContainer.style.marginTop = '20px';
+            detailedStatsContainer.style.fontFamily = 'monospace';
+            detailedStatsContainer.style.fontSize = '14px';
+            detailedStatsContainer.style.whiteSpace = 'pre-line';
+            stats.parentNode.insertBefore(detailedStatsContainer, stats.nextSibling);
+            
             statsInterval = setInterval(() => {
                 const now = performance.now();
                 const elapsed = (now - prevTime) / 1000;  // seconds
@@ -466,12 +563,56 @@
                 
                 const currentFps = Math.round(framesDelta / elapsed);
                 const bitrateMbps = ((bytesDelta * 8) / elapsed / 1000000).toFixed(2);  // Mbps
+                const avgCompressedSize = Math.round(calculateAverage(performanceMetrics.compressedSize) / 1024); // KB
                 
+                // Basic stats - keep this for compatibility
                 stats.textContent = `Sending: ${currentFps} fps, ${bitrateMbps} Mbps, ${Math.round(bytesSent/1024)} KB total`;
+                
+                // Detailed performance metrics
+                const avgDrawTime = calculateAverage(performanceMetrics.drawTime).toFixed(2);
+                const avgBlobTime = calculateAverage(performanceMetrics.blobTime).toFixed(2);
+                const avgSendTime = calculateAverage(performanceMetrics.sendTime).toFixed(2);
+                const avgTotalTime = calculateAverage(performanceMetrics.totalTime).toFixed(2);
+                
+                // Construct a detailed performance report
+                let detailedReport = `PERFORMANCE METRICS:
+Frame Processing Pipeline:
+┌─────────────┬───────────┬────────────┐
+│ Stage       │ Time (ms) │ % of Total │
+├─────────────┼───────────┼────────────┤
+│ Draw to Canvas │ ${avgDrawTime.padStart(7)} │ ${(avgDrawTime / avgTotalTime * 100).toFixed(1).padStart(6)}% │
+│ JPEG Compression │ ${avgBlobTime.padStart(7)} │ ${(avgBlobTime / avgTotalTime * 100).toFixed(1).padStart(6)}% │
+│ WebSocket Send │ ${avgSendTime.padStart(7)} │ ${(avgSendTime / avgTotalTime * 100).toFixed(1).padStart(6)}% │
+│ TOTAL       │ ${avgTotalTime.padStart(7)} │    100% │
+└─────────────┴───────────┴────────────┘
+
+Network Status:
+- Avg Frame Size: ${avgCompressedSize} KB
+- WebSocket Buffered: ${(websocket.bufferedAmount / 1024).toFixed(2)} KB
+- Blocking: ${performanceMetrics.blockedByNetwork ? 'YES - NETWORK BOTTLENECK' : 'No'}
+- Theoretical Max FPS: ${(1000 / avgTotalTime).toFixed(1)}
+
+Camera Input: ${canvasElement.width}x${canvasElement.height} @ ${framesPerSecond}fps
+Compression Quality: 70%`;
+
+                detailedStatsContainer.textContent = detailedReport;
                 
                 prevFramesSent = framesSent;
                 prevBytesSent = bytesSent;
                 prevTime = now;
+                
+                // Log to console occasionally
+                if (framesSent % 100 === 0) {
+                    console.log("Performance metrics:", {
+                        fps: currentFps,
+                        drawTime: avgDrawTime,
+                        compressTime: avgBlobTime,
+                        sendTime: avgSendTime,
+                        totalTime: avgTotalTime,
+                        frameSize: avgCompressedSize,
+                        blockedByNetwork: performanceMetrics.blockedByNetwork
+                    });
+                }
             }, 1000);
         }
         

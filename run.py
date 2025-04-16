@@ -32,17 +32,84 @@ import os
 import datetime
 import platform
 import pickle
+import collections
+import logging
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from colorama import Fore, Back, Style
 from src.pipelines.faster_live_portrait_pipeline import FasterLivePortraitPipeline
 from src.utils.utils import video_has_audio
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("run_py")
+
 if platform.system().lower() == 'windows':
     FFMPEG = "third_party/ffmpeg-7.0.1-full_build/bin/ffmpeg.exe"
 else:
     FFMPEG = "ffmpeg"
 
+# Performance metrics tracking
+class PerformanceTracker:
+    def __init__(self):
+        self.metrics = {
+            "decode_time": collections.deque(maxlen=30),
+            "process_time": collections.deque(maxlen=30),
+            "encode_time": collections.deque(maxlen=30),
+            "display_time": collections.deque(maxlen=30),
+            "total_time": collections.deque(maxlen=30),
+            "frame_sizes": collections.deque(maxlen=30),
+        }
+        self.frames_received = 0
+        self.frames_processed = 0
+        self.last_metrics_log = time.time()
+        self.metrics_log_interval = 5.0  # Log metrics every 5 seconds
+
+    def update_metric(self, metric_name, value):
+        """Update a performance metric"""
+        self.metrics[metric_name].append(value)
+        
+    def calculate_avg_metrics(self):
+        """Calculate average metrics for logging"""
+        avg_metrics = {}
+        for key, values in self.metrics.items():
+            if values:
+                avg_metrics[key] = sum(values) / len(values)
+            else:
+                avg_metrics[key] = 0
+        return avg_metrics
+    
+    def log_metrics(self):
+        """Log performance metrics if interval has passed"""
+        current_time = time.time()
+        if current_time - self.last_metrics_log >= self.metrics_log_interval:
+            self.last_metrics_log = current_time
+            avg_metrics = self.calculate_avg_metrics()
+            
+            # Calculate average FPS based on processing time
+            avg_fps = 1000 / avg_metrics["total_time"] if avg_metrics["total_time"] > 0 else 0
+            
+            # Log detailed performance info
+            logger.info(f"=== Performance metrics ===")
+            logger.info(f"  Decode:    {avg_metrics['decode_time']:.2f}ms ({avg_metrics['decode_time']/avg_metrics['total_time']*100:.1f}%)")
+            logger.info(f"  Processing: {avg_metrics['process_time']:.2f}ms ({avg_metrics['process_time']/avg_metrics['total_time']*100:.1f}%)")
+            logger.info(f"  Encode:    {avg_metrics['encode_time']:.2f}ms ({avg_metrics['encode_time']/avg_metrics['total_time']*100:.1f}%)")
+            logger.info(f"  Display:   {avg_metrics['display_time']:.2f}ms ({avg_metrics['display_time']/avg_metrics['total_time']*100:.1f}%)")
+            logger.info(f"  Total Time: {avg_metrics['total_time']:.2f}ms (Theoretical max FPS: {avg_fps:.1f})")
+            
+            # Log frame counts
+            logger.info(f"  Frames: Received {self.frames_received}, Processed {self.frames_processed}")
+            
+            # Add frame size info
+            if self.metrics["frame_sizes"]:
+                avg_size = sum(self.metrics["frame_sizes"]) / len(self.metrics["frame_sizes"])
+                logger.info(f"  Avg Frame Size: {avg_size/1024:.2f} KB")
+            
+            return True
+        return False
+
+# Initialize performance tracker
+performance_tracker = PerformanceTracker()
 
 def run_with_video(args):
     print(Fore.RED+'Render,  Q > exit,  S > Stitching,  Z > RelativeMotion,  X > AnimationRegion,  C > CropDrivingVideo, KL > AdjustSourceScale, NM > AdjustDriverScale,  Space > Webcamassource,  R > SwitchRealtimeWebcamUpdate'+Style.RESET_ALL)
@@ -84,13 +151,32 @@ def run_with_video(args):
 
     frame_ind = 0
     while vcap.isOpened():
+        # Start timing total frame processing
+        total_start_time = time.time()
+        
+        # Timing for decoding
+        decode_start_time = time.time()
         ret, frame = vcap.read()
+        decode_time = time.time() - decode_start_time
+        performance_tracker.update_metric("decode_time", decode_time * 1000)  # Convert to ms
+        
         if not ret:
             break
-        t0 = time.time()
+        
+        # Track frame info
+        performance_tracker.frames_received += 1
+        if frame is not None:
+            frame_size = frame.nbytes
+            performance_tracker.update_metric("frame_sizes", frame_size)
+        
+        # Timing for model processing
+        process_start_time = time.time()
         first_frame = frame_ind == 0
         dri_crop, out_crop, out_org, dri_motion_info = pipe.run(frame, pipe.src_imgs[0], pipe.src_infos[0],
                                                                 first_frame=first_frame)
+        process_time = time.time() - process_start_time
+        performance_tracker.update_metric("process_time", process_time * 1000)  # Convert to ms
+        
         frame_ind += 1
         if out_crop is None:
             print(f"no face in driving frame:{frame_ind}")
@@ -100,11 +186,19 @@ def run_with_video(args):
         c_eyes_lst.append(dri_motion_info[1])
         c_lip_lst.append(dri_motion_info[2])
 
-        infer_times.append(time.time() - t0)
-        # print(time.time() - t0)
+        infer_times.append(process_time)
+        performance_tracker.frames_processed += 1
+        
+        # Timing for encoding/post-processing
+        encode_start_time = time.time()
         dri_crop = cv2.resize(dri_crop, (512, 512))
         out_crop = np.concatenate([dri_crop, out_crop], axis=1)
         out_crop = cv2.cvtColor(out_crop, cv2.COLOR_RGB2BGR)
+        encode_time = time.time() - encode_start_time
+        performance_tracker.update_metric("encode_time", encode_time * 1000)  # Convert to ms
+        
+        # Timing for display or writing
+        display_start_time = time.time()
         if not args.realtime:
             vout_crop.write(out_crop)
             out_org = cv2.cvtColor(out_org, cv2.COLOR_RGB2BGR)
@@ -116,9 +210,19 @@ def run_with_video(args):
             else:
                 # image show in realtime mode
                 cv2.imshow('Render', out_crop)
-            # 按下'q'键退出循环
+            # Check for key press
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
+        display_time = time.time() - display_start_time
+        performance_tracker.update_metric("display_time", display_time * 1000)  # Convert to ms
+        
+        # Total processing time
+        total_time = time.time() - total_start_time
+        performance_tracker.update_metric("total_time", total_time * 1000)  # Convert to ms
+        
+        # Log metrics periodically
+        performance_tracker.log_metrics()
+        
     vcap.release()
     if not args.realtime:
         vout_crop.release()
@@ -147,6 +251,14 @@ def run_with_video(args):
     else:
         cv2.destroyAllWindows()
 
+    # Calculate final stats
+    avg_metrics = performance_tracker.calculate_avg_metrics()
+    logger.info("=== Final Performance Summary ===")
+    logger.info(f"  Processing: {avg_metrics['process_time']:.2f}ms")
+    logger.info(f"  Total: {avg_metrics['total_time']:.2f}ms")
+    logger.info(f"  Theoretical max FPS: {1000/avg_metrics['total_time']:.2f}")
+    logger.info(f"  Frames processed: {performance_tracker.frames_processed}")
+    
     print(
         "inference median time: {} ms/frame, mean time: {} ms/frame".format(np.median(infer_times) * 1000,
                                                                             np.mean(infer_times) * 1000))
@@ -200,18 +312,34 @@ def run_with_pkl(args):
 
     frame_num = len(motion_lst)
     for frame_ind in tqdm(range(frame_num)):
-        t0 = time.time()
+        # Start timing total frame processing
+        total_start_time = time.time()
+        performance_tracker.frames_received += 1
+        
+        # Timing for model processing (includes everything for pkl mode)
+        process_start_time = time.time()
         first_frame = frame_ind == 0
         dri_motion_info_ = [motion_lst[frame_ind], c_eyes_lst[frame_ind], c_lip_lst[frame_ind]]
         out_crop, out_org = pipe.run_with_pkl(dri_motion_info_, pipe.src_imgs[0], pipe.src_infos[0],
                                               first_frame=first_frame)
+        process_time = time.time() - process_start_time
+        performance_tracker.update_metric("process_time", process_time * 1000)  # Convert to ms
+        
         if out_crop is None:
             print(f"no face in driving frame:{frame_ind}")
             continue
-
-        infer_times.append(time.time() - t0)
-        # print(time.time() - t0)
+            
+        performance_tracker.frames_processed += 1
+        infer_times.append(process_time)
+        
+        # Timing for encoding/post-processing
+        encode_start_time = time.time()
         out_crop = cv2.cvtColor(out_crop, cv2.COLOR_RGB2BGR)
+        encode_time = time.time() - encode_start_time
+        performance_tracker.update_metric("encode_time", encode_time * 1000)  # Convert to ms
+        
+        # Timing for display or writing
+        display_start_time = time.time()
         if not args.realtime:
             vout_crop.write(out_crop)
             out_org = cv2.cvtColor(out_org, cv2.COLOR_RGB2BGR)
@@ -223,7 +351,8 @@ def run_with_pkl(args):
             else:
                 # image show in realtime mode
                 cv2.imshow('Render,  Q > exit,  S > Stitching,  Z > RelativeMotion,  X > AnimationRegion,  C > CropDrivingVideo, KL > AdjustSourceScale, NM > AdjustDriverScale,  Space > Webcamassource,  R > SwitchRealtimeWebcamUpdate', out_crop)
-            # Press the 'q' key to exit the loop, r to switch realtime src_webcam update, spacebar to switch sourceisWebcam
+            
+            # Handle keyboard inputs
             k = cv2.waitKey(1) & 0xFF
             if k == ord('q'):
                 break
@@ -272,6 +401,16 @@ def run_with_pkl(args):
                 infer_cfg.crop_params.dri_scale += 0.1
                 print('dri_scale:'+str(infer_cfg.crop_params.dri_scale))
 
+        display_time = time.time() - display_start_time
+        performance_tracker.update_metric("display_time", display_time * 1000)  # Convert to ms
+        
+        # Total processing time
+        total_time = time.time() - total_start_time
+        performance_tracker.update_metric("total_time", total_time * 1000)  # Convert to ms
+        
+        # Log metrics periodically
+        performance_tracker.log_metrics()
+
     if not args.realtime:
         vout_crop.release()
         vout_org.release()
@@ -299,6 +438,14 @@ def run_with_pkl(args):
     else:
         cv2.destroyAllWindows()
 
+    # Calculate final stats
+    avg_metrics = performance_tracker.calculate_avg_metrics()
+    logger.info("=== Final Performance Summary ===")
+    logger.info(f"  Processing: {avg_metrics['process_time']:.2f}ms")
+    logger.info(f"  Total: {avg_metrics['total_time']:.2f}ms")
+    logger.info(f"  Theoretical max FPS: {1000/avg_metrics['total_time']:.2f}")
+    logger.info(f"  Frames processed: {performance_tracker.frames_processed}")
+    
     print(
         "inference median time: {} ms/frame, mean time: {} ms/frame".format(np.median(infer_times) * 1000,
                                                                             np.mean(infer_times) * 1000))

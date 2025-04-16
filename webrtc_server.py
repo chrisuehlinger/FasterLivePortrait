@@ -49,6 +49,20 @@ class ConnectionManager:
         self.frames_received: Dict[str, int] = {}
         self.frames_processed: Dict[str, int] = {}
         self.processing_tasks: Dict[str, asyncio.Task] = {}
+        self.performance_metrics = {
+            "receive_time": [],
+            "decode_time": [],
+            "process_time": [],
+            "encode_time": [],
+            "send_time": [],
+            "total_time": [],
+            "queue_time": [], 
+            "frames_received": {},
+            "frames_processed": {},
+            "avg_metrics": {}
+        }
+        self.last_metrics_log = time.time()
+        self.metrics_log_interval = 5.0  # Log metrics every 5 seconds
         
     async def connect_actor(self, session_id: str, websocket: WebSocket):
         await websocket.accept()
@@ -156,35 +170,80 @@ class ConnectionManager:
                 queue = self.frame_queues[session_id]
                 
                 try:
+                    # Start timing for queue wait
+                    queue_start_time = time.time()
+                    
                     # Get the next frame from the queue (will wait if queue is empty)
                     frame = await queue.get()
+                    
+                    # Measure queue wait time
+                    queue_time = time.time() - queue_start_time
+                    self._update_metric("queue_time", queue_time * 1000)  # Convert to ms
+                    
+                    # Start timing the entire processing pipeline
+                    total_start_time = time.time()
                     
                     # Get the processor from the server
                     processor = self.frame_processors.get(session_id)
                     if not processor:
                         await asyncio.sleep(0.01)
                         continue
-                        
-                    # Process the frame
+                    
+                    # Process the frame (this is the most time-consuming step)
                     self.is_processing[session_id] = True
+                    process_start_time = time.time()
                     processed_frame = processor.process_frame(frame)
+                    process_time = time.time() - process_start_time
+                    self._update_metric("process_time", process_time * 1000)  # Convert to ms
                     
                     if processed_frame is not None:
                         # Store the processed frame
                         self.processed_frames[session_id] = processed_frame
                         
-                        # Send to all viewers of this session
-                        await self.send_frame_to_viewers(processed_frame, session_id)
+                        # Encode the frame to JPEG
+                        encode_start_time = time.time()
+                        success, encoded_img = cv2.imencode('.jpg', processed_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                        if not success:
+                            continue
+                        binary_img = encoded_img.tobytes()
+                        encode_time = time.time() - encode_start_time
+                        self._update_metric("encode_time", encode_time * 1000)  # Convert to ms
+                        
+                        # Send to viewers
+                        send_start_time = time.time()
+                        await self._send_bytes_to_viewers(binary_img, session_id)
+                        send_time = time.time() - send_start_time
+                        self._update_metric("send_time", send_time * 1000)  # Convert to ms
+                        
+                        # Total time
+                        total_time = time.time() - total_start_time
+                        self._update_metric("total_time", total_time * 1000)  # Convert to ms
                         
                         # Update stats
                         self.frames_processed[session_id] += 1
                         
-                        # Log stats occasionally
-                        if self.frames_processed[session_id] % 100 == 0:
+                        # Log performance metrics periodically
+                        current_time = time.time()
+                        if current_time - self.last_metrics_log >= self.metrics_log_interval:
+                            self.last_metrics_log = current_time
+                            avg_metrics = self._calculate_avg_metrics()
+                            
+                            # Calculate average FPS based on processing time
+                            avg_fps = 1000 / avg_metrics["total_time"] if avg_metrics["total_time"] > 0 else 0
+                            
+                            # Log detailed performance info
+                            logger.info(f"Performance metrics - Session {session_id}:")
+                            logger.info(f"  Queue Wait: {avg_metrics['queue_time']:.2f}ms")
+                            logger.info(f"  Processing: {avg_metrics['process_time']:.2f}ms ({avg_metrics['process_time']/avg_metrics['total_time']*100:.1f}%)")
+                            logger.info(f"  JPEG Encode: {avg_metrics['encode_time']:.2f}ms ({avg_metrics['encode_time']/avg_metrics['total_time']*100:.1f}%)")
+                            logger.info(f"  WebSocket Send: {avg_metrics['send_time']:.2f}ms ({avg_metrics['send_time']/avg_metrics['total_time']*100:.1f}%)")
+                            logger.info(f"  Total Time: {avg_metrics['total_time']:.2f}ms (Theoretical max FPS: {avg_fps:.1f})")
+                            
+                            # Log frame counts
                             dropped = self.frames_received[session_id] - self.frames_processed[session_id]
-                            logger.info(f"Session {session_id}: Processed {self.frames_processed[session_id]} frames, " +
-                                       f"received {self.frames_received[session_id]} frames, dropped {dropped} frames " +
-                                       f"({dropped / self.frames_received[session_id]:.1%} drop rate)")
+                            drop_rate = dropped / self.frames_received[session_id] if self.frames_received[session_id] > 0 else 0
+                            logger.info(f"  Frames: Received {self.frames_received[session_id]}, Processed {self.frames_processed[session_id]}")
+                            logger.info(f"  Dropped: {dropped} frames ({drop_rate:.1%})")
                     
                 except asyncio.CancelledError:
                     # Task is being cancelled
@@ -200,23 +259,16 @@ class ConnectionManager:
         except Exception as e:
             logger.error(f"Error in process_frames_loop for session {session_id}: {e}")
             
-    async def send_frame_to_viewers(self, frame: np.ndarray, session_id: str):
-        """Send processed frame to all connected viewers for a specific session"""
+    async def _send_bytes_to_viewers(self, binary_data: bytes, session_id: str):
+        """Send binary data to all connected viewers for a specific session"""
         if session_id not in self.viewer_connections or not self.viewer_connections[session_id]:
             return
             
-        # Convert frame to JPEG for efficient transmission
-        success, encoded_img = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        if not success:
-            return
-            
-        binary_img = encoded_img.tobytes()
-        
         # Send to all viewers of this session
         disconnected_viewers = []
         for i, viewer_websocket in enumerate(self.viewer_connections[session_id]):
             try:
-                await viewer_websocket.send_bytes(binary_img)
+                await viewer_websocket.send_bytes(binary_data)
             except Exception as e:
                 logger.error(f"Error sending to viewer in session {session_id}: {e}")
                 disconnected_viewers.append(viewer_websocket)
@@ -224,6 +276,23 @@ class ConnectionManager:
         # Remove any disconnected viewers
         for websocket in disconnected_viewers:
             self.viewer_connections[session_id].remove(websocket)
+
+    def _update_metric(self, metric_name, value):
+        """Update a performance metric, maintaining a rolling average"""
+        if len(self.performance_metrics[metric_name]) >= 30:  # Keep last 30 values
+            self.performance_metrics[metric_name].pop(0)
+        self.performance_metrics[metric_name].append(value)
+        
+    def _calculate_avg_metrics(self):
+        """Calculate average metrics for logging"""
+        metrics = {}
+        for key in ["receive_time", "decode_time", "process_time", "encode_time", "send_time", "total_time", "queue_time"]:
+            values = self.performance_metrics[key]
+            if values:
+                metrics[key] = sum(values) / len(values)
+            else:
+                metrics[key] = 0
+        return metrics
 
 # Base Video processor class
 class BaseVideoProcessor:
