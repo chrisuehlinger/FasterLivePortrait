@@ -115,7 +115,12 @@ COPY grid-sample3d-trt-plugin /opt/grid-sample3d-trt-plugin
 #     && make -j$(nproc) \
 #     && cp libgrid_sample3d_plugin.so /opt/grid-sample3d-trt-plugin/build/libgrid_sample_3d_plugin.so
 
-COPY . /root/FasterLivePortrait/
+COPY ./configs /root/FasterLivePortrait/configs
+COPY ./scripts /root/FasterLivePortrait/scripts
+COPY ./src /root/FasterLivePortrait/src
+COPY ./assets /root/FasterLivePortrait/assets
+COPY ./entrypoint.sh /root/FasterLivePortrait/entrypoint.sh
+COPY ./webrtc_server.py /root/FasterLivePortrait/webrtc_server.py
 
 ENTRYPOINT [ "./entrypoint.sh" ]
 # CMD /bin/bash
