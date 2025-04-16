@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #
-# WebRTC server for FasterLivePortrait
-# This script enables live WebRTC streaming of actor video to animate a source image
+# WebSocket server for FasterLivePortrait
+# This script enables live WebSocket streaming of actor video to animate a source image
 
 import asyncio
 import json
@@ -13,13 +13,11 @@ import os
 import cv2
 import numpy as np
 import time
+import base64
 from pathlib import Path
 from typing import Dict, Optional, List
 from omegaconf import OmegaConf
 
-from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription
-from aiortc.contrib.media import MediaBlackhole, MediaPlayer, MediaRecorder, MediaRelay
-from av import VideoFrame
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,39 +35,85 @@ except Exception as e:
     FASTER_LIVE_PORTRAIT_AVAILABLE = False
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("webrtc_server")
+logger = logging.getLogger("websocket_server")
 
 # Connection manager for WebSockets
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: Dict[str, WebSocket] = {}
-        self.viewer_connections: Dict[str, WebSocket] = {}
+        self.actor_connections: Dict[str, WebSocket] = {}
+        self.viewer_connections: Dict[str, List[WebSocket]] = {}
         self.latest_frames: Dict[str, np.ndarray] = {}
         self.processed_frames: Dict[str, np.ndarray] = {}
+        self.frame_processors: Dict[str, object] = {}
+        self.processing_locks: Dict[str, asyncio.Lock] = {}
         
     async def connect_actor(self, session_id: str, websocket: WebSocket):
         await websocket.accept()
-        self.active_connections[session_id] = websocket
+        self.actor_connections[session_id] = websocket
+        self.processing_locks[session_id] = asyncio.Lock()
         logger.info(f"Actor connected: {session_id}")
         
     async def connect_viewer(self, session_id: str, websocket: WebSocket):
         await websocket.accept()
-        self.viewer_connections[session_id] = websocket
-        logger.info(f"Viewer connected: {session_id}")
+        
+        # Initialize list for this session if it doesn't exist
+        if session_id not in self.viewer_connections:
+            self.viewer_connections[session_id] = []
+            
+        # Add this viewer to the session's viewers
+        self.viewer_connections[session_id].append(websocket)
+        logger.info(f"Viewer connected to session: {session_id}, total viewers: {len(self.viewer_connections[session_id])}")
         
     def disconnect_actor(self, session_id: str):
-        if session_id in self.active_connections:
-            del self.active_connections[session_id]
+        if session_id in self.actor_connections:
+            del self.actor_connections[session_id]
             logger.info(f"Actor disconnected: {session_id}")
             
-    def disconnect_viewer(self, session_id: str):
+            # Clean up related resources
+            if session_id in self.processing_locks:
+                del self.processing_locks[session_id]
+            if session_id in self.latest_frames:
+                del self.latest_frames[session_id]
+            if session_id in self.processed_frames:
+                del self.processed_frames[session_id]
+            
+    def disconnect_viewer(self, session_id: str, websocket: WebSocket):
         if session_id in self.viewer_connections:
-            del self.viewer_connections[session_id]
-            logger.info(f"Viewer disconnected: {session_id}")
+            try:
+                self.viewer_connections[session_id].remove(websocket)
+                logger.info(f"Viewer disconnected from session: {session_id}, remaining viewers: {len(self.viewer_connections[session_id])}")
+                
+                # Remove the session entry if no more viewers
+                if not self.viewer_connections[session_id]:
+                    del self.viewer_connections[session_id]
+                    
+            except ValueError:
+                # WebSocket was not in the list
+                pass
     
+    async def process_frame(self, session_id: str, frame: np.ndarray, processor):
+        """Process a frame and send it to all connected viewers for this session"""
+        try:
+            # Use a lock to prevent concurrent processing of frames for the same session
+            async with self.processing_locks[session_id]:
+                # Process the frame
+                processed_frame = processor.process_frame(frame)
+                
+                if processed_frame is not None:
+                    # Store the processed frame
+                    self.processed_frames[session_id] = processed_frame
+                    
+                    # Send to all viewers of this session
+                    await self.send_frame_to_viewers(processed_frame, session_id)
+                    
+                    return True
+        except Exception as e:
+            logger.error(f"Error processing frame for session {session_id}: {e}")
+            return False
+            
     async def send_frame_to_viewers(self, frame: np.ndarray, session_id: str):
         """Send processed frame to all connected viewers for a specific session"""
-        if not self.viewer_connections:
+        if session_id not in self.viewer_connections or not self.viewer_connections[session_id]:
             return
             
         # Convert frame to JPEG for efficient transmission
@@ -80,13 +124,17 @@ class ConnectionManager:
         binary_img = encoded_img.tobytes()
         
         # Send to all viewers of this session
-        for viewer_id, connection in list(self.viewer_connections.items()):
-            if viewer_id.startswith(f"{session_id}-"):
-                try:
-                    await connection.send_bytes(binary_img)
-                except Exception as e:
-                    logger.error(f"Error sending to viewer {viewer_id}: {e}")
-                    self.disconnect_viewer(viewer_id)
+        disconnected_viewers = []
+        for i, viewer_websocket in enumerate(self.viewer_connections[session_id]):
+            try:
+                await viewer_websocket.send_bytes(binary_img)
+            except Exception as e:
+                logger.error(f"Error sending to viewer in session {session_id}: {e}")
+                disconnected_viewers.append(viewer_websocket)
+        
+        # Remove any disconnected viewers
+        for websocket in disconnected_viewers:
+            self.viewer_connections[session_id].remove(websocket)
 
 # Base Video processor class
 class BaseVideoProcessor:
@@ -191,6 +239,42 @@ class FasterLivePortraitProcessor(BaseVideoProcessor):
             # Add FPS and metadata to output frame
             if out_org is not None:
                 out_org = cv2.cvtColor(out_org, cv2.COLOR_RGB2BGR)
+                
+                # Create thumbnail of driving frame
+                thumbnail_height = int(out_org.shape[0] / 4)  # 1/4 of output height
+                thumbnail_width = int(thumbnail_height * frame.shape[1] / frame.shape[0])  # Maintain aspect ratio
+                thumbnail = cv2.resize(frame, (thumbnail_width, thumbnail_height))
+                
+                # Create a position for the thumbnail in the lower right corner with padding
+                padding = 10
+                y_offset = out_org.shape[0] - thumbnail_height - padding
+                x_offset = out_org.shape[1] - thumbnail_width - padding
+                
+                # Add border to thumbnail
+                border_color = (0, 255, 0)  # Green border
+                border_size = 2
+                thumbnail_with_border = cv2.copyMakeBorder(
+                    thumbnail, 
+                    border_size, border_size, border_size, border_size, 
+                    cv2.BORDER_CONSTANT, 
+                    value=border_color
+                )
+                
+                # Create a region of interest in the output image
+                roi_height, roi_width = thumbnail_with_border.shape[:2]
+                roi = out_org[
+                    y_offset:y_offset + roi_height,
+                    x_offset:x_offset + roi_width
+                ]
+                
+                # Calculate alpha blend mask to make thumbnail slightly transparent
+                alpha = 0.7  # 70% opacity
+                # Blend the thumbnail with the background
+                if roi.shape[:2] == thumbnail_with_border.shape[:2]:  # Ensure shapes match
+                    blended_roi = cv2.addWeighted(thumbnail_with_border, alpha, roi, 1-alpha, 0)
+                    out_org[y_offset:y_offset + roi_height, x_offset:x_offset + roi_width] = blended_roi
+                
+                # Add FPS and metadata text
                 info_text = f"FPS: {self.fps} | Frame: {self.frame_counter} | Input: {original_width}x{original_height}"
                 cv2.putText(
                     out_org,
@@ -201,6 +285,7 @@ class FasterLivePortraitProcessor(BaseVideoProcessor):
                     (0, 255, 0),
                     2
                 )
+                
                 return out_org
             
             return None
@@ -210,178 +295,55 @@ class FasterLivePortraitProcessor(BaseVideoProcessor):
             # Fall back to basic processor if FasterLivePortrait fails
             return BaseVideoProcessor.process_frame(self, frame)
 
-# WebRTC video track for processing frames
-class RTCVideoProcessor(MediaStreamTrack):
-    kind = "video"
-    
-    def __init__(self, track, processor, connection_manager, session_id):
-        super().__init__()
-        self.track = track
-        self.processor = processor
-        self.connection_manager = connection_manager
-        self.session_id = session_id
-        self.processing = False
-        self.latest_frame = None
-        self.dropped_frames = 0
-        self.processed_frames = 0
-        self.total_frames = 0
-        self.last_stats_time = time.time()
-        
-        # Track frame timestamps for rate calculations
-        self.last_frame_time = time.time()
-        self.input_fps = 0
-        self.input_frame_count = 0
-        self.input_fps_start_time = time.time()
-        
-    async def recv(self):
-        frame = await self.track.recv()
-        self.total_frames += 1
-        
-        # Calculate input FPS (frames coming from WebRTC)
-        current_time = time.time()
-        self.input_frame_count += 1
-        if current_time - self.input_fps_start_time >= 1.0:
-            self.input_fps = self.input_frame_count
-            self.input_frame_count = 0
-            self.input_fps_start_time = current_time
-        
-        # In single-threaded mode, processing state isn't concurrent - we need to compute
-        # dropped frames based on timing, not on buffer accumulation
-        if self.processed_frames > 0:  # After we've processed at least one frame
-            # Calculate expected frames since last processed frame
-            # based on the input frame rate (typically 30fps for webcams)
-            time_since_last_process = current_time - self.last_frame_time
-            expected_frames = max(0, round(time_since_last_process * self.input_fps) - 1)
-            self.dropped_frames += expected_frames
-        
-        # Store frame for processing
-        self.latest_frame = frame
-        
-        # If we can process this frame, do it now
-        if not self.processing:
-            self.processing = True
-            self.last_frame_time = current_time
-            
-            try:
-                # IMPORTANT: Be explicit about frame format conversion
-                # Convert frame to numpy array with proper format
-                img = None
-                try:
-                    # Get frame in BGR24 format - standard for OpenCV processing
-                    img = frame.to_ndarray(format="bgr24")
-                except Exception as e:
-                    logger.error(f"Error converting frame: {e}")
-                    # Fallback to RGB format and convert if needed
-                    try:
-                        img = frame.to_ndarray(format="rgb24")
-                        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                    except Exception as e2:
-                        logger.error(f"Fallback conversion failed: {e2}")
-                        return frame
-                
-                if img is None or img.size == 0:
-                    logger.warning("Empty frame received")
-                    return frame
-                
-                # Make a clean copy for the thumbnail to avoid potential memory issues
-                driving_frame = img.copy()
-                
-                # Process the frame
-                processed_img = self.processor.process_frame(img)
-                
-                # If processing failed, use original frame
-                if processed_img is None:
-                    processed_img = img
-                
-                # Add thumbnail of driving frame to lower right corner
-                # Calculate thumbnail size (1/4 of the original size)
-                h, w = processed_img.shape[:2]
-                thumb_h, thumb_w = h // 4, w // 4
-                
-                # Resize driving frame to thumbnail size
-                thumbnail = cv2.resize(driving_frame, (thumb_w, thumb_h))
-                
-                # Calculate position for lower right corner
-                y_offset = h - thumb_h - 10  # 10px padding from bottom
-                x_offset = w - thumb_w - 10  # 10px padding from right
-                
-                # Add white border around thumbnail
-                cv2.rectangle(processed_img, (x_offset-2, y_offset-2), 
-                            (x_offset+thumb_w+2, y_offset+thumb_h+2), (255, 255, 255), 2)
-                
-                # Overlay the thumbnail on the processed image
-                processed_img[y_offset:y_offset+thumb_h, x_offset:x_offset+thumb_w] = thumbnail
-                
-                # Add "Input" label above thumbnail
-                cv2.putText(
-                    processed_img,
-                    "Input",
-                    (x_offset, y_offset-5),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (255, 255, 255),
-                    1
-                )
-                
-                # Update counters
-                self.processed_frames += 1
-                
-                # Log stats periodically
-                if current_time - self.last_stats_time > 5.0:  # Every 5 seconds
-                    process_rate = self.processed_frames / 5.0  # Processed FPS
-                    drop_rate = self.dropped_frames / 5.0      # Dropped FPS
-                    drop_percentage = 0
-                    if self.input_fps > 0:  # Avoid division by zero
-                        drop_percentage = (drop_rate / self.input_fps) * 100
-                        
-                    logger.info(f"Performance - Input: {self.input_fps} FPS, Processed: {process_rate:.1f} FPS, " +
-                              f"Dropped: ~{drop_rate:.1f} FPS ({drop_percentage:.1f}%)")
-                    
-                    # Reset counters for next interval
-                    self.dropped_frames = 0
-                    self.processed_frames = 0
-                    self.last_stats_time = current_time
-                
-                # Send the processed frame to all viewers via websocket
-                await self.connection_manager.send_frame_to_viewers(processed_img, self.session_id)
-                
-                # Convert back to VideoFrame - ensure we preserve format properly
-                new_frame = VideoFrame.from_ndarray(processed_img, format="bgr24")
-                new_frame.pts = frame.pts
-                new_frame.time_base = frame.time_base
-                return new_frame
-                
-            except Exception as e:
-                logger.error(f"Error in frame processing: {e}")
-                return frame
-            finally:
-                self.processing = False
-        
-        # If we couldn't process (in theory this shouldn't happen in single-threaded mode),
-        # return the original frame
-        return frame
-
 # Server application setup
 class Server:
     def __init__(self, config):
         self.app = FastAPI()
         self.connection_manager = ConnectionManager()
         self.config = config
-        self.peer_connections = {}
         
         # Try to initialize FasterLivePortrait processor, fall back to basic if it fails
         try:
             if config.use_basic_processor:
-                raise ValueError("Basic processor requested")
-                
-            self.processor = FasterLivePortraitProcessor(
-                config_path=config.config_path,
-                src_image_path=config.source_image,
-                is_animal=config.is_animal
-            )
-            logger.info("Using FasterLivePortrait processor")
+                logger.info("Basic processor requested via command line argument")
+                raise ValueError("Basic processor explicitly requested")
+            
+            if not FASTER_LIVE_PORTRAIT_AVAILABLE:
+                logger.error("FasterLivePortrait modules couldn't be imported")
+                raise ImportError("FasterLivePortrait is not available")
+            
+            # Check if config path exists
+            if not os.path.isfile(config.config_path):
+                logger.error(f"Config file {config.config_path} not found")
+                raise FileNotFoundError(f"Config file not found: {config.config_path}")
+            
+            # Check if source image exists
+            if not os.path.isfile(config.source_image):
+                logger.error(f"Source image {config.source_image} not found")
+                raise FileNotFoundError(f"Source image not found: {config.source_image}")
+            
+            logger.info(f"Initializing FasterLivePortrait with config: {config.config_path}")
+            logger.info(f"Source image: {config.source_image}")
+            logger.info(f"Is animal model: {config.is_animal}")
+            
+            try:
+                self.processor = FasterLivePortraitProcessor(
+                    config_path=config.config_path,
+                    src_image_path=config.source_image,
+                    is_animal=config.is_animal
+                )
+                logger.info("Successfully initialized FasterLivePortrait processor")
+            except Exception as processor_error:
+                logger.error(f"Error initializing FasterLivePortrait processor: {type(processor_error).__name__}: {processor_error}")
+                # Try to provide more detailed error information
+                if hasattr(processor_error, "__traceback__"):
+                    import traceback
+                    tb_str = "".join(traceback.format_exception(None, processor_error, processor_error.__traceback__))
+                    logger.error(f"Traceback:\n{tb_str}")
+                raise
+            
         except Exception as e:
-            logger.warning(f"Failed to initialize FasterLivePortrait processor: {e}")
+            logger.error(f"Failed to initialize FasterLivePortrait processor: {e}")
             logger.info("Falling back to basic video processor")
             self.processor = BaseVideoProcessor()
         
@@ -400,70 +362,84 @@ class Server:
     def _setup_routes(self):
         @self.app.get("/")
         async def get_index():
-            return {"message": "FasterLivePortrait WebRTC Server"}
-            
-        @self.app.post("/offer")
-        async def receive_offer(request: dict = Body(...)):
-            offer = RTCSessionDescription(sdp=request["sdp"], type=request["type"])
-            pc = RTCPeerConnection()
-            
+            return {"message": "FasterLivePortrait WebSocket Server"}
+        
+        @self.app.post("/create_session")
+        async def create_session(request: dict = Body(...)):
+            """Create a new session ID or validate an existing one"""
             # Allow custom session ID if provided, otherwise generate one
             session_id = request.get("session_id", str(uuid.uuid4()))
-            logger.info(f"New connection with session ID: {session_id}")
-            
-            self.peer_connections[session_id] = pc
-            
-            @pc.on("connectionstatechange")
-            async def on_connectionstatechange():
-                if pc.connectionState == "failed" or pc.connectionState == "closed":
-                    if session_id in self.peer_connections:
-                        del self.peer_connections[session_id]
-            
-            @pc.on("track")
-            def on_track(track):
-                if track.kind == "video":
-                    local_video = RTCVideoProcessor(
-                        track=track,
-                        processor=self.processor,
-                        connection_manager=self.connection_manager,
-                        session_id=session_id
-                    )
-                    pc.addTrack(local_video)
-                
-            # Set the remote description
-            await pc.setRemoteDescription(offer)
-            
-            # Create answer
-            answer = await pc.createAnswer()
-            await pc.setLocalDescription(answer)
-            
             return {
-                "sdp": pc.localDescription.sdp,
-                "type": pc.localDescription.type,
-                "session_id": session_id
+                "session_id": session_id,
+                "status": "success"
             }
+            
+        @self.app.websocket("/ws/actor/{session_id}")
+        async def actor_websocket(websocket: WebSocket, session_id: str):
+            """WebSocket endpoint for actors to stream video frames"""
+            try:
+                await self.connection_manager.connect_actor(session_id, websocket)
+                
+                # Send a confirmation to the actor
+                await websocket.send_json({"status": "connected", "session_id": session_id})
+                
+                while True:
+                    # Receive frame data from actor
+                    frame_data = await websocket.receive_bytes()
+                    
+                    # Decode image from binary data
+                    nparr = np.frombuffer(frame_data, np.uint8)
+                    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                    
+                    if frame is not None:
+                        # Process the frame and send to viewers
+                        await self.connection_manager.process_frame(session_id, frame, self.processor)
+                    
+            except WebSocketDisconnect:
+                self.connection_manager.disconnect_actor(session_id)
+                logger.info(f"Actor disconnected: {session_id}")
+            except Exception as e:
+                logger.error(f"Error in actor websocket: {e}")
+                self.connection_manager.disconnect_actor(session_id)
             
         @self.app.websocket("/ws/viewer/{session_id}")
         async def viewer_websocket(websocket: WebSocket, session_id: str):
+            """WebSocket endpoint for viewers to receive processed frames"""
             try:
-                # Modify session_id to include a unique viewer ID
-                viewer_id = f"{session_id}-viewer-{uuid.uuid4()}"
-                await self.connection_manager.connect_viewer(viewer_id, websocket)
-                while True:
-                    # Keep connection alive and wait for frames
-                    await websocket.receive_text()
-            except WebSocketDisconnect:
-                self.connection_manager.disconnect_viewer(viewer_id)
+                await self.connection_manager.connect_viewer(session_id, websocket)
                 
+                # Send confirmation to the viewer
+                await websocket.send_json({
+                    "status": "connected", 
+                    "session_id": session_id,
+                    "message": "Connected to stream. Waiting for video..."
+                })
+                
+                # Keep the connection open, wait for heartbeats from the client
+                while True:
+                    # This will wait for any message from the client (like heartbeats)
+                    message = await websocket.receive_text()
+                    
+                    # If it's a heartbeat, respond
+                    if message == "heartbeat":
+                        await websocket.send_json({"status": "heartbeat_ack"})
+                    
+            except WebSocketDisconnect:
+                self.connection_manager.disconnect_viewer(session_id, websocket)
+                logger.info(f"Viewer disconnected from session: {session_id}")
+            except Exception as e:
+                logger.error(f"Error in viewer websocket: {e}")
+                self.connection_manager.disconnect_viewer(session_id, websocket)
+        
         # Serve static files
         self.app.mount("/frontend", StaticFiles(directory="frontend"), name="frontend")
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="FasterLivePortrait WebRTC Server")
+    parser = argparse.ArgumentParser(description="FasterLivePortrait WebSocket Server")
     parser.add_argument("--host", default="0.0.0.0", help="Host to run server on")
     parser.add_argument("--port", type=int, default=8080, help="Port to run server on")
-    parser.add_argument("--config-path", default="configs/onnx_infer.yaml", help="Path to FasterLivePortrait config")
+    parser.add_argument("--config-path", default="configs/trt_infer.yaml", help="Path to FasterLivePortrait config")
     parser.add_argument("--source-image", default="assets/examples/source/s2.jpg", help="Path to source image to animate")
     parser.add_argument("--is-animal", action="store_true", help="Use animal model")
     parser.add_argument("--use-basic-processor", action="store_true", help="Use basic OpenCV processor instead of FasterLivePortrait")

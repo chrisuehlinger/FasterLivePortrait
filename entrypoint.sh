@@ -27,6 +27,6 @@ export LD_LIBRARY_PATH=/usr/local/tensorrt/lib:$LD_LIBRARY_PATH
 
 python webrtc_server.py \
   --source-image assets/examples/source/s2.jpg \
+  --config-path configs/onnx_infer.yaml \
   --ssl-cert certs/cert.pem \
   --ssl-key certs/key.pem
-  

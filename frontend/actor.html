@@ -179,8 +179,16 @@
         
         // Global variables
         let localStream;
-        let peerConnection;
+        let websocket;
         let sessionId;
+        let canvasElement;
+        let canvasCtx;
+        let framesSent = 0;
+        let bytesReceived = 0;
+        let bytesSent = 0;
+        let frameCapturing = false;
+        let lastFrameTime = 0;
+        let framesPerSecond = 0;
         let statsInterval;
         
         // Initialize camera devices list
@@ -224,6 +232,18 @@
                 localStream = await navigator.mediaDevices.getUserMedia(constraints);
                 localVideo.srcObject = localStream;
                 
+                // Create canvas for frame capture if it doesn't exist
+                if (!canvasElement) {
+                    canvasElement = document.createElement('canvas');
+                    canvasCtx = canvasElement.getContext('2d');
+                }
+                
+                // Set canvas size based on video tracks
+                const videoTrack = localStream.getVideoTracks()[0];
+                const settings = videoTrack.getSettings();
+                canvasElement.width = settings.width;
+                canvasElement.height = settings.height;
+                
                 connectionStatus.textContent = 'Camera ready. Click "Connect to Server" to begin streaming.';
                 connectionStatus.className = 'status success';
                 connectButton.disabled = false;
@@ -239,78 +259,105 @@
             }
         }
         
-        // Connect to WebRTC server
+        // Connect to WebSocket server
         async function connectToServer() {
             try {
                 loading.style.display = 'inline';
-                disconnectButton.disabled = true;
-                
-                // Create peer connection
-                const config = {
-                    iceServers: [
-                        { urls: 'stun:stun.l.google.com:19302' }
-                    ]
-                };
-                
-                peerConnection = new RTCPeerConnection(config);
-                
-                // Add tracks to the peer connection
-                localStream.getTracks().forEach(track => {
-                    peerConnection.addTrack(track, localStream);
-                });
-                
-                // Create offer
-                const offer = await peerConnection.createOffer();
-                await peerConnection.setLocalDescription(offer);
                 
                 // Get custom session ID if provided
                 const customSessionId = sessionIdInput.value.trim();
+                sessionId = customSessionId || generateRandomId();
                 
-                // Send offer to server
-                const response = await fetch(`${API_URL}/offer`, {
+                // First create/validate the session
+                const response = await fetch(`${API_URL}/create_session`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        sdp: peerConnection.localDescription.sdp,
-                        type: peerConnection.localDescription.type,
-                        session_id: customSessionId || undefined  // Only send if not empty
+                        session_id: sessionId
                     })
                 });
                 
-                // Process server answer
                 const data = await response.json();
-                sessionId = data.session_id;
-                
-                // Update the session ID input field to show the actual session ID used
+                sessionId = data.session_id;  // Use the session ID returned by server
                 sessionIdInput.value = sessionId;
                 
-                await peerConnection.setRemoteDescription(
-                    new RTCSessionDescription({
-                        sdp: data.sdp,
-                        type: data.type
-                    })
-                );
+                // Now connect via WebSocket
+                websocket = new WebSocket(`${WS_URL}/ws/actor/${sessionId}`);
                 
-                loading.style.display = 'none';
-                connectionStatus.textContent = 'Connected to server! Streaming video...';
-                connectionStatus.className = 'status success';
-                disconnectButton.disabled = false;
-                connectButton.disabled = true;
-                sessionIdInput.disabled = true;
+                websocket.onopen = () => {
+                    loading.style.display = 'none';
+                    connectionStatus.textContent = 'Connected to server! Starting video stream...';
+                    connectionStatus.className = 'status success';
+                    
+                    disconnectButton.disabled = false;
+                    connectButton.disabled = true;
+                    sessionIdInput.disabled = true;
+                    
+                    // Start capturing and sending frames
+                    startFrameCapture();
+                    
+                    // Start collecting stats
+                    startStatsCollection();
+                    
+                    // Show viewer link
+                    const hostUrl = window.location.protocol + '//' + window.location.host;
+                    const viewerUrl = `${hostUrl}/frontend/viewer.html?session=${sessionId}`;
+                    viewerLink.innerHTML = `
+                        <p>Share this link with viewers:</p>
+                        <a href="${viewerUrl}" target="_blank">${viewerUrl}</a>
+                    `;
+                    viewerLink.style.display = 'block';
+                };
                 
-                // Show viewer link
-                const hostUrl = window.location.protocol + '//' + window.location.host;
-                const viewerUrl = `${hostUrl}/frontend/viewer.html?session=${sessionId}`;
-                viewerLink.innerHTML = `
-                    <p>Share this link with viewers:</p>
-                    <a href="${viewerUrl}" target="_blank">${viewerUrl}</a>
-                `;
-                viewerLink.style.display = 'block';
+                websocket.onclose = (event) => {
+                    loading.style.display = 'none';
+                    stopFrameCapture();
+                    
+                    if (event.wasClean) {
+                        connectionStatus.textContent = `Disconnected: ${event.reason || 'Connection closed'}`;
+                    } else {
+                        connectionStatus.textContent = 'Connection lost. Server may be down.';
+                    }
+                    connectionStatus.className = 'status error';
+                    
+                    disconnectButton.disabled = true;
+                    connectButton.disabled = false;
+                    sessionIdInput.disabled = false;
+                    viewerLink.style.display = 'none';
+                };
                 
-                // Start collecting stats
-                startStatsCollection();
+                websocket.onerror = (error) => {
+                    loading.style.display = 'none';
+                    connectionStatus.textContent = `Connection error: ${error.message || 'Unknown error'}`;
+                    connectionStatus.className = 'status error';
+                };
+                
+                websocket.onmessage = (event) => {
+                    // Handle any messages from server
+                    try {
+                        const message = JSON.parse(event.data);
+                        console.log('Server message:', message);
+                        
+                        if (message.status === 'connected') {
+                            // Connection confirmed
+                            connectionStatus.textContent = `Connected to server with session ID: ${message.session_id}`;
+                        }
+                    } catch (e) {
+                        console.log('Received binary data or invalid JSON');
+                    }
+                    
+                    // Count bytes received for stats
+                    if (typeof event.data === 'string') {
+                        bytesReceived += event.data.length;
+                    } else if (event.data instanceof ArrayBuffer) {
+                        bytesReceived += event.data.byteLength;
+                    } else if (event.data instanceof Blob) {
+                        bytesReceived += event.data.size;
+                    }
+                };
+                
             } catch (error) {
                 loading.style.display = 'none';
                 console.error('Connection error:', error);
@@ -324,10 +371,12 @@
         
         // Disconnect from server
         function disconnect() {
-            if (peerConnection) {
-                peerConnection.close();
-                peerConnection = null;
+            if (websocket) {
+                websocket.close();
+                websocket = null;
             }
+            
+            stopFrameCapture();
             
             if (statsInterval) {
                 clearInterval(statsInterval);
@@ -343,43 +392,86 @@
             stats.textContent = '';
         }
         
+        // Start capturing and sending frames
+        function startFrameCapture() {
+            if (frameCapturing) return;
+            
+            frameCapturing = true;
+            framesSent = 0;
+            bytesSent = 0;
+            lastFrameTime = performance.now();
+            framesPerSecond = parseInt(frameRateInput.value, 10);
+            
+            // Use requestAnimationFrame for smoother frame capture
+            captureAndSendFrame();
+        }
+        
+        // Stop capturing frames
+        function stopFrameCapture() {
+            frameCapturing = false;
+        }
+        
+        // Capture and send a single frame
+        function captureAndSendFrame() {
+            if (!frameCapturing || !websocket || websocket.readyState !== WebSocket.OPEN) {
+                return;
+            }
+            
+            const now = performance.now();
+            const elapsed = now - lastFrameTime;
+            const targetInterval = 1000 / framesPerSecond;
+            
+            // Throttle to target frame rate
+            if (elapsed >= targetInterval) {
+                // Draw current video frame to canvas
+                canvasCtx.drawImage(localVideo, 0, 0, canvasElement.width, canvasElement.height);
+                
+                // Convert canvas to JPEG blob with quality setting
+                canvasElement.toBlob((blob) => {
+                    if (blob && websocket && websocket.readyState === WebSocket.OPEN) {
+                        websocket.send(blob);
+                        framesSent++;
+                        bytesSent += blob.size;
+                    }
+                }, 'image/jpeg', 0.7);  // Adjust quality as needed (0.7 = 70% quality)
+                
+                lastFrameTime = now;
+            }
+            
+            // Schedule next frame
+            requestAnimationFrame(captureAndSendFrame);
+        }
+        
+        // Generate a random session ID
+        function generateRandomId() {
+            return Math.random().toString(36).substring(2, 10);
+        }
+        
         // Collect and display connection stats
-        async function startStatsCollection() {
+        function startStatsCollection() {
             if (statsInterval) {
                 clearInterval(statsInterval);
             }
             
-            statsInterval = setInterval(async () => {
-                if (!peerConnection) return;
+            let prevFramesSent = 0;
+            let prevBytesSent = 0;
+            let prevTime = performance.now();
+            
+            statsInterval = setInterval(() => {
+                const now = performance.now();
+                const elapsed = (now - prevTime) / 1000;  // seconds
                 
-                try {
-                    const statsReport = await peerConnection.getStats();
-                    let outboundRtp = null;
-                    let remoteInboundRtp = null;
-                    
-                    statsReport.forEach(report => {
-                        if (report.type === 'outbound-rtp' && report.kind === 'video') {
-                            outboundRtp = report;
-                        } else if (report.type === 'remote-inbound-rtp' && report.kind === 'video') {
-                            remoteInboundRtp = report;
-                        }
-                    });
-                    
-                    if (outboundRtp) {
-                        const bitrateMbps = ((outboundRtp.bytesSent - (outboundRtp._bytesSent || 0)) * 8 / 1000 / 1000).toFixed(2);
-                        outboundRtp._bytesSent = outboundRtp.bytesSent;
-                        
-                        let statsText = `Sending: ${outboundRtp.frameWidth}x${outboundRtp.frameHeight} @ ${outboundRtp.framesPerSecond}fps, ${bitrateMbps} Mbps`;
-                        
-                        if (remoteInboundRtp && remoteInboundRtp.roundTripTime) {
-                            statsText += `, RTT: ${(remoteInboundRtp.roundTripTime * 1000).toFixed(0)}ms`;
-                        }
-                        
-                        stats.textContent = statsText;
-                    }
-                } catch (e) {
-                    console.error('Error getting stats:', e);
-                }
+                const framesDelta = framesSent - prevFramesSent;
+                const bytesDelta = bytesSent - prevBytesSent;
+                
+                const currentFps = Math.round(framesDelta / elapsed);
+                const bitrateMbps = ((bytesDelta * 8) / elapsed / 1000000).toFixed(2);  // Mbps
+                
+                stats.textContent = `Sending: ${currentFps} fps, ${bitrateMbps} Mbps, ${Math.round(bytesSent/1024)} KB total`;
+                
+                prevFramesSent = framesSent;
+                prevBytesSent = bytesSent;
+                prevTime = now;
             }, 1000);
         }
         
@@ -392,9 +484,9 @@
         window.addEventListener('DOMContentLoaded', () => {
             initializeCameras();
             
-            // Check if browser supports WebRTC
+            // Check if browser supports getUserMedia
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                connectionStatus.textContent = 'WebRTC is not supported in your browser.';
+                connectionStatus.textContent = 'Camera access is not supported in your browser.';
                 connectionStatus.className = 'status error';
                 startButton.disabled = true;
                 connectButton.disabled = true;
