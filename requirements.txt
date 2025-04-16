@@ -15,3 +15,7 @@ munch
 phonemizer
 aiohttp
 aiortc
+fastapi
+uvicorn
+websockets
+av

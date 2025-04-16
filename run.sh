@@ -1,7 +1,6 @@
 #!/bin/bash -ex
 
 docker build . \
-  --build-arg TENSORRT_VERSION=8.6.1 \
   -t uehreka/fasterliveportrait:latest
 
 docker system prune -f

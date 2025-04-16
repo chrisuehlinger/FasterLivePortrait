@@ -1,444 +1,417 @@
 <!DOCTYPE html>
-<html>
-
+<html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Actor - Lempira</title>
-  <style>
-    button {
-      padding: 8px 16px;
-    }
-
-    pre {
-      overflow-x: hidden;
-      overflow-y: auto;
-    }
-
-    video {
-      width: 100%;
-    }
-
-    .option {
-      margin-bottom: 8px;
-    }
-
-    #media {
-      max-width: 1280px;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FasterLivePortrait - Actor Streaming</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+        }
+        .container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            justify-content: center;
+        }
+        .video-container {
+            background-color: #fff;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 640px;
+        }
+        .control-panel {
+            background-color: #fff;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 640px;
+        }
+        video {
+            width: 100%;
+            border-radius: 4px;
+            background-color: #000;
+        }
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+        button:disabled {
+            background-color: #95a5a6;
+            cursor: not-allowed;
+        }
+        .status {
+            margin-top: 10px;
+            font-weight: bold;
+        }
+        .error {
+            color: #e74c3c;
+        }
+        .success {
+            color: #27ae60;
+        }
+        #viewerLink {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f1c40f;
+            border-radius: 4px;
+            font-weight: bold;
+            display: none;
+        }
+        .loading {
+            display: none;
+            margin-left: 10px;
+        }
+        pre {
+            background-color: #f9f9f9;
+            padding: 10px;
+            border-radius: 4px;
+            white-space: pre-wrap;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="text"] {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+    </style>
 </head>
-
 <body>
+    <h1>FasterLivePortrait - Actor Streaming</h1>
+    
+    <div class="container">
+        <div class="video-container">
+            <h2>Your Camera Feed</h2>
+            <video id="localVideo" autoplay muted playsinline></video>
+            <div class="status" id="connectionStatus">Not connected</div>
+        </div>
+        
+        <div class="control-panel">
+            <h2>Streaming Controls</h2>
+            <div class="form-group">
+                <label for="sessionIdInput">Session ID:</label>
+                <input type="text" id="sessionIdInput" placeholder="Enter a custom session ID or leave blank for random" value="performer1">
+                <p><small>Use a simple, memorable ID to make it easier for viewers to connect</small></p>
+            </div>
+            <div>
+                <button id="startButton">Start Camera</button>
+                <button id="connectButton" disabled>Connect to Server</button>
+                <button id="disconnectButton" disabled>Disconnect</button>
+                <span class="loading" id="loading">Connecting...</span>
+            </div>
+            
+            <div id="viewerLink"></div>
+            
+            <div class="status" id="stats"></div>
+            
+            <h3>Camera Settings</h3>
+            <div>
+                <label for="cameraSelect">Camera: </label>
+                <select id="cameraSelect"></select>
+            </div>
+            <div>
+                <label for="resolutionSelect">Resolution: </label>
+                <select id="resolutionSelect">
+                    <option value="640x480">640x480</option>
+                    <option value="1280x720">1280x720 (HD)</option>
+                    <option value="1920x1080" selected>1920x1080 (Full HD)</option>
+                </select>
+            </div>
+            <div>
+                <label for="frameRateInput">Frame Rate: </label>
+                <input type="number" id="frameRateInput" min="1" max="60" value="30">
+            </div>
+        </div>
+    </div>
 
-  <h2>Options</h2>
-  <div class="option">
-    <input id="use-datachannel" checked="checked" type="checkbox" />
-    <label for="use-datachannel">Use datachannel</label>
-    <select id="datachannel-parameters">
-      <option value='{"ordered": true}'>Ordered, reliable</option>
-      <option value='{"ordered": false, "maxRetransmits": 0}'>Unordered, no retransmissions</option>
-      <option value='{"ordered": false, "maxPacketLifetime": 500}'>Unordered, 500ms lifetime</option>
-    </select>
-  </div>
-  <div class="option">
-    <input id="use-audio" type="checkbox" />
-    <label for="use-audio">Use audio</label>
-    <select id="audio-input">
-      <option value="" selected>Default device</option>
-    </select>
-    <select id="audio-codec">
-      <option value="default" selected>Default codecs</option>
-      <option value="opus/48000/2">Opus</option>
-      <option value="PCMU/8000">PCMU</option>
-      <option value="PCMA/8000">PCMA</option>
-    </select>
-  </div>
-  <div class="option">
-    <input id="use-video" checked="checked" type="checkbox" />
-    <label for="use-video">Use video</label>
-    <select id="video-input">
-      <option value="" selected>Default device</option>
-    </select>
-    <select id="video-resolution">
-      <option value="" selected>Default resolution</option>
-      <option value="320x240">320x240</option>
-      <option value="640x480">640x480</option>
-      <option value="960x540">960x540</option>
-      <option value="1280x720">1280x720</option>
-    </select>
-    <select id="video-transform">
-      <option value="cartoon">Cartoon effect</option>
-      <option value="none" selected>No transform</option>
-      <option value="edges">Edge detection</option>
-      <option value="rotate">Rotate</option>
-    </select>
-    <select id="video-codec">
-      <option value="default" selected>Default codecs</option>
-      <option value="VP8/90000">VP8</option>
-      <option value="H264/90000">H264</option>
-    </select>
-  </div>
-  <div class="option">
-    <input id="use-stun" type="checkbox" />
-    <label for="use-stun">Use STUN server</label>
-  </div>
-
-  <button id="start" onclick="start()">Start</button>
-  <button id="stop" style="display: none" onclick="stop()">Stop</button>
-
-  <h2>State</h2>
-  <p>
-    ICE gathering state: <span id="ice-gathering-state"></span>
-  </p>
-  <p>
-    ICE connection state: <span id="ice-connection-state"></span>
-  </p>
-  <p>
-    Signaling state: <span id="signaling-state"></span>
-  </p>
-
-  <div id="media" style="display: none">
-    <h2>Media</h2>
-
-    <audio id="audio" autoplay="true"></audio>
-    <video id="video" autoplay="true" playsinline="true" style="transform: scaleX(-1)"></video>
-  </div>
-
-  <h2>Data channel</h2>
-  <pre id="data-channel" style="height: 200px;"></pre>
-
-  <h2>SDP</h2>
-
-  <h3>Offer</h3>
-  <pre id="offer-sdp"></pre>
-
-  <h3>Answer</h3>
-  <pre id="answer-sdp"></pre>
-
-  <script type="module">
-    // get DOM elements
-    var dataChannelLog = document.getElementById('data-channel'),
-      iceConnectionLog = document.getElementById('ice-connection-state'),
-      iceGatheringLog = document.getElementById('ice-gathering-state'),
-      signalingLog = document.getElementById('signaling-state');
-
-    // peer connection
-    var pc = null;
-
-    // data channel
-    var dc = null, dcInterval = null;
-
-    function createPeerConnection() {
-      var config = {
-        sdpSemantics: 'unified-plan'
-      };
-
-      if (document.getElementById('use-stun').checked) {
-        config.iceServers = [{ urls: ['stun:stun.l.google.com:19302'] }];
-      }
-
-      pc = new RTCPeerConnection(config);
-
-      // register some listeners to help debugging
-      pc.addEventListener('icegatheringstatechange', () => {
-        iceGatheringLog.textContent += ' -> ' + pc.iceGatheringState;
-      }, false);
-      iceGatheringLog.textContent = pc.iceGatheringState;
-
-      pc.addEventListener('iceconnectionstatechange', () => {
-        iceConnectionLog.textContent += ' -> ' + pc.iceConnectionState;
-      }, false);
-      iceConnectionLog.textContent = pc.iceConnectionState;
-
-      pc.addEventListener('signalingstatechange', () => {
-        signalingLog.textContent += ' -> ' + pc.signalingState;
-      }, false);
-      signalingLog.textContent = pc.signalingState;
-
-      // connect audio / video
-      pc.addEventListener('track', (evt) => {
-        if (evt.track.kind == 'video')
-          document.getElementById('video').srcObject = evt.streams[0];
-        else
-          document.getElementById('audio').srcObject = evt.streams[0];
-      });
-
-      return pc;
-    }
-
-    function enumerateInputDevices() {
-      const populateSelect = (select, devices) => {
-        let counter = 1;
-        devices.forEach((device) => {
-          const option = document.createElement('option');
-          option.value = device.deviceId;
-          option.text = device.label || ('Device #' + counter);
-          select.appendChild(option);
-          counter += 1;
-        });
-      };
-
-      navigator.mediaDevices.enumerateDevices().then((devices) => {
-        populateSelect(
-          document.getElementById('audio-input'),
-          devices.filter((device) => device.kind == 'audioinput')
-        );
-        populateSelect(
-          document.getElementById('video-input'),
-          devices.filter((device) => device.kind == 'videoinput')
-        );
-      }).catch((e) => {
-        alert(e);
-      });
-    }
-
-    function negotiate() {
-      return pc.createOffer().then((offer) => {
-        return pc.setLocalDescription(offer);
-      }).then(() => {
-        // wait for ICE gathering to complete
-        return new Promise((resolve) => {
-          if (pc.iceGatheringState === 'complete') {
-            resolve();
-          } else {
-            function checkState() {
-              if (pc.iceGatheringState === 'complete') {
-                pc.removeEventListener('icegatheringstatechange', checkState);
-                resolve();
-              }
+    <script>
+        // Configuration
+        const SERVER_URL = window.location.hostname + ":" + window.location.port;
+        const USE_SSL = window.location.protocol === 'https:';
+        const API_URL = `${USE_SSL ? 'https' : 'http'}://${SERVER_URL}`;
+        const WS_URL = `${USE_SSL ? 'wss' : 'ws'}://${SERVER_URL}`;
+        
+        // Elements
+        const localVideo = document.getElementById('localVideo');
+        const startButton = document.getElementById('startButton');
+        const connectButton = document.getElementById('connectButton');
+        const disconnectButton = document.getElementById('disconnectButton');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const cameraSelect = document.getElementById('cameraSelect');
+        const resolutionSelect = document.getElementById('resolutionSelect');
+        const frameRateInput = document.getElementById('frameRateInput');
+        const viewerLink = document.getElementById('viewerLink');
+        const loading = document.getElementById('loading');
+        const stats = document.getElementById('stats');
+        const sessionIdInput = document.getElementById('sessionIdInput');
+        
+        // Global variables
+        let localStream;
+        let peerConnection;
+        let sessionId;
+        let statsInterval;
+        
+        // Initialize camera devices list
+        async function initializeCameras() {
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                
+                cameraSelect.innerHTML = '';
+                videoDevices.forEach(device => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.text = device.label || `Camera ${cameraSelect.length + 1}`;
+                    cameraSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error enumerating devices:', error);
             }
-            pc.addEventListener('icegatheringstatechange', checkState);
-          }
+        }
+        
+        // Start camera
+        async function startCamera() {
+            try {
+                const [width, height] = resolutionSelect.value.split('x').map(Number);
+                const frameRate = parseInt(frameRateInput.value, 10);
+                
+                const constraints = {
+                    audio: false,
+                    video: {
+                        deviceId: cameraSelect.value ? { exact: cameraSelect.value } : undefined,
+                        width: { ideal: width },
+                        height: { ideal: height },
+                        frameRate: { ideal: frameRate }
+                    }
+                };
+                
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                }
+                
+                localStream = await navigator.mediaDevices.getUserMedia(constraints);
+                localVideo.srcObject = localStream;
+                
+                connectionStatus.textContent = 'Camera ready. Click "Connect to Server" to begin streaming.';
+                connectionStatus.className = 'status success';
+                connectButton.disabled = false;
+                
+                // If we haven't initialized cameras with labels yet, do it now
+                if (cameraSelect.options.length === 0 || !cameraSelect.options[0].text) {
+                    initializeCameras();
+                }
+            } catch (error) {
+                console.error('Error accessing media devices:', error);
+                connectionStatus.textContent = `Camera error: ${error.message}`;
+                connectionStatus.className = 'status error';
+            }
+        }
+        
+        // Connect to WebRTC server
+        async function connectToServer() {
+            try {
+                loading.style.display = 'inline';
+                disconnectButton.disabled = true;
+                
+                // Create peer connection
+                const config = {
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' }
+                    ]
+                };
+                
+                peerConnection = new RTCPeerConnection(config);
+                
+                // Add tracks to the peer connection
+                localStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, localStream);
+                });
+                
+                // Create offer
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                
+                // Get custom session ID if provided
+                const customSessionId = sessionIdInput.value.trim();
+                
+                // Send offer to server
+                const response = await fetch(`${API_URL}/offer`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        sdp: peerConnection.localDescription.sdp,
+                        type: peerConnection.localDescription.type,
+                        session_id: customSessionId || undefined  // Only send if not empty
+                    })
+                });
+                
+                // Process server answer
+                const data = await response.json();
+                sessionId = data.session_id;
+                
+                // Update the session ID input field to show the actual session ID used
+                sessionIdInput.value = sessionId;
+                
+                await peerConnection.setRemoteDescription(
+                    new RTCSessionDescription({
+                        sdp: data.sdp,
+                        type: data.type
+                    })
+                );
+                
+                loading.style.display = 'none';
+                connectionStatus.textContent = 'Connected to server! Streaming video...';
+                connectionStatus.className = 'status success';
+                disconnectButton.disabled = false;
+                connectButton.disabled = true;
+                sessionIdInput.disabled = true;
+                
+                // Show viewer link
+                const hostUrl = window.location.protocol + '//' + window.location.host;
+                const viewerUrl = `${hostUrl}/frontend/viewer.html?session=${sessionId}`;
+                viewerLink.innerHTML = `
+                    <p>Share this link with viewers:</p>
+                    <a href="${viewerUrl}" target="_blank">${viewerUrl}</a>
+                `;
+                viewerLink.style.display = 'block';
+                
+                // Start collecting stats
+                startStatsCollection();
+            } catch (error) {
+                loading.style.display = 'none';
+                console.error('Connection error:', error);
+                connectionStatus.textContent = `Connection failed: ${error.message}`;
+                connectionStatus.className = 'status error';
+                disconnectButton.disabled = true;
+                connectButton.disabled = false;
+                sessionIdInput.disabled = false;
+            }
+        }
+        
+        // Disconnect from server
+        function disconnect() {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            
+            if (statsInterval) {
+                clearInterval(statsInterval);
+                statsInterval = null;
+            }
+            
+            connectButton.disabled = false;
+            disconnectButton.disabled = true;
+            sessionIdInput.disabled = false;
+            viewerLink.style.display = 'none';
+            connectionStatus.textContent = 'Disconnected from server.';
+            connectionStatus.className = 'status';
+            stats.textContent = '';
+        }
+        
+        // Collect and display connection stats
+        async function startStatsCollection() {
+            if (statsInterval) {
+                clearInterval(statsInterval);
+            }
+            
+            statsInterval = setInterval(async () => {
+                if (!peerConnection) return;
+                
+                try {
+                    const statsReport = await peerConnection.getStats();
+                    let outboundRtp = null;
+                    let remoteInboundRtp = null;
+                    
+                    statsReport.forEach(report => {
+                        if (report.type === 'outbound-rtp' && report.kind === 'video') {
+                            outboundRtp = report;
+                        } else if (report.type === 'remote-inbound-rtp' && report.kind === 'video') {
+                            remoteInboundRtp = report;
+                        }
+                    });
+                    
+                    if (outboundRtp) {
+                        const bitrateMbps = ((outboundRtp.bytesSent - (outboundRtp._bytesSent || 0)) * 8 / 1000 / 1000).toFixed(2);
+                        outboundRtp._bytesSent = outboundRtp.bytesSent;
+                        
+                        let statsText = `Sending: ${outboundRtp.frameWidth}x${outboundRtp.frameHeight} @ ${outboundRtp.framesPerSecond}fps, ${bitrateMbps} Mbps`;
+                        
+                        if (remoteInboundRtp && remoteInboundRtp.roundTripTime) {
+                            statsText += `, RTT: ${(remoteInboundRtp.roundTripTime * 1000).toFixed(0)}ms`;
+                        }
+                        
+                        stats.textContent = statsText;
+                    }
+                } catch (e) {
+                    console.error('Error getting stats:', e);
+                }
+            }, 1000);
+        }
+        
+        // Event listeners
+        startButton.addEventListener('click', startCamera);
+        connectButton.addEventListener('click', connectToServer);
+        disconnectButton.addEventListener('click', disconnect);
+        
+        // Initialize cameras when page loads
+        window.addEventListener('DOMContentLoaded', () => {
+            initializeCameras();
+            
+            // Check if browser supports WebRTC
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                connectionStatus.textContent = 'WebRTC is not supported in your browser.';
+                connectionStatus.className = 'status error';
+                startButton.disabled = true;
+                connectButton.disabled = true;
+            }
+            
+            // Set session ID from URL query parameter if present
+            const urlParams = new URLSearchParams(window.location.search);
+            const sessionFromUrl = urlParams.get('session');
+            if (sessionFromUrl) {
+                sessionIdInput.value = sessionFromUrl;
+            }
         });
-      }).then(() => {
-        var offer = pc.localDescription;
-        var codec;
-
-        codec = document.getElementById('audio-codec').value;
-        if (codec !== 'default') {
-          offer.sdp = sdpFilterCodec('audio', codec, offer.sdp);
-        }
-
-        codec = document.getElementById('video-codec').value;
-        if (codec !== 'default') {
-          offer.sdp = sdpFilterCodec('video', codec, offer.sdp);
-        }
-
-        document.getElementById('offer-sdp').textContent = offer.sdp;
-        return fetch('/offer', {
-          body: JSON.stringify({
-            sdp: offer.sdp,
-            type: offer.type,
-            video_transform: document.getElementById('video-transform').value
-          }),
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          method: 'POST'
+        
+        // Handle page unload
+        window.addEventListener('beforeunload', () => {
+            disconnect();
         });
-      }).then((response) => {
-        return response.json();
-      }).then((answer) => {
-        document.getElementById('answer-sdp').textContent = answer.sdp;
-        return pc.setRemoteDescription(answer);
-      }).catch((e) => {
-        alert(e);
-      });
-    }
-
-    function start() {
-      document.getElementById('start').style.display = 'none';
-
-      pc = createPeerConnection();
-
-      var time_start = null;
-
-      const current_stamp = () => {
-        if (time_start === null) {
-          time_start = new Date().getTime();
-          return 0;
-        } else {
-          return new Date().getTime() - time_start;
-        }
-      };
-
-      if (document.getElementById('use-datachannel').checked) {
-        var parameters = JSON.parse(document.getElementById('datachannel-parameters').value);
-
-        dc = pc.createDataChannel('chat', parameters);
-        dc.addEventListener('close', () => {
-          clearInterval(dcInterval);
-          dataChannelLog.textContent += '- close\n';
-        });
-        dc.addEventListener('open', () => {
-          dataChannelLog.textContent += '- open\n';
-          dcInterval = setInterval(() => {
-            var message = 'ping ' + current_stamp();
-            dataChannelLog.textContent += '> ' + message + '\n';
-            dc.send(message);
-          }, 1000);
-        });
-        dc.addEventListener('message', (evt) => {
-          dataChannelLog.textContent += '< ' + evt.data + '\n';
-
-          if (evt.data.substring(0, 4) === 'pong') {
-            var elapsed_ms = current_stamp() - parseInt(evt.data.substring(5), 10);
-            dataChannelLog.textContent += ' RTT ' + elapsed_ms + ' ms\n';
-          }
-        });
-      }
-
-      // Build media constraints.
-
-      const constraints = {
-        audio: false,
-        video: false
-      };
-
-      if (document.getElementById('use-audio').checked) {
-        const audioConstraints = {};
-
-        const device = document.getElementById('audio-input').value;
-        if (device) {
-          audioConstraints.deviceId = { exact: device };
-        }
-
-        constraints.audio = Object.keys(audioConstraints).length ? audioConstraints : true;
-      }
-
-      if (document.getElementById('use-video').checked) {
-        const videoConstraints = {};
-
-        const device = document.getElementById('video-input').value;
-        if (device) {
-          videoConstraints.deviceId = { exact: device };
-        }
-
-        const resolution = document.getElementById('video-resolution').value;
-        if (resolution) {
-          const dimensions = resolution.split('x');
-          videoConstraints.width = parseInt(dimensions[0], 0);
-          videoConstraints.height = parseInt(dimensions[1], 0);
-        }
-
-        constraints.video = Object.keys(videoConstraints).length ? videoConstraints : true;
-      }
-
-      // Acquire media and start negociation.
-
-      if (constraints.audio || constraints.video) {
-        if (constraints.video) {
-          document.getElementById('media').style.display = 'block';
-        }
-        navigator.mediaDevices.getUserMedia(constraints).then((stream) => {
-          stream.getTracks().forEach((track) => {
-            pc.addTrack(track, stream);
-          });
-          return negotiate();
-        }, (err) => {
-          alert('Could not acquire media: ' + err);
-        });
-      } else {
-        negotiate();
-      }
-
-      document.getElementById('stop').style.display = 'inline-block';
-    }
-
-    function stop() {
-      document.getElementById('stop').style.display = 'none';
-
-      // close data channel
-      if (dc) {
-        dc.close();
-      }
-
-      // close transceivers
-      if (pc.getTransceivers) {
-        pc.getTransceivers().forEach((transceiver) => {
-          if (transceiver.stop) {
-            transceiver.stop();
-          }
-        });
-      }
-
-      // close local audio / video
-      pc.getSenders().forEach((sender) => {
-        sender.track.stop();
-      });
-
-      // close peer connection
-      setTimeout(() => {
-        pc.close();
-      }, 500);
-    }
-
-    function sdpFilterCodec(kind, codec, realSdp) {
-      var allowed = []
-      var rtxRegex = new RegExp('a=fmtp:(\\d+) apt=(\\d+)\r$');
-      var codecRegex = new RegExp('a=rtpmap:([0-9]+) ' + escapeRegExp(codec))
-      var videoRegex = new RegExp('(m=' + kind + ' .*?)( ([0-9]+))*\\s*$')
-
-      var lines = realSdp.split('\n');
-
-      var isKind = false;
-      for (var i = 0; i < lines.length; i++) {
-        if (lines[i].startsWith('m=' + kind + ' ')) {
-          isKind = true;
-        } else if (lines[i].startsWith('m=')) {
-          isKind = false;
-        }
-
-        if (isKind) {
-          var match = lines[i].match(codecRegex);
-          if (match) {
-            allowed.push(parseInt(match[1]));
-          }
-
-          match = lines[i].match(rtxRegex);
-          if (match && allowed.includes(parseInt(match[2]))) {
-            allowed.push(parseInt(match[1]));
-          }
-        }
-      }
-
-      var skipRegex = 'a=(fmtp|rtcp-fb|rtpmap):([0-9]+)';
-      var sdp = '';
-
-      isKind = false;
-      for (var i = 0; i < lines.length; i++) {
-        if (lines[i].startsWith('m=' + kind + ' ')) {
-          isKind = true;
-        } else if (lines[i].startsWith('m=')) {
-          isKind = false;
-        }
-
-        if (isKind) {
-          var skipMatch = lines[i].match(skipRegex);
-          if (skipMatch && !allowed.includes(parseInt(skipMatch[2]))) {
-            continue;
-          } else if (lines[i].match(videoRegex)) {
-            sdp += lines[i].replace(videoRegex, '$1 ' + allowed.join(' ')) + '\n';
-          } else {
-            sdp += lines[i] + '\n';
-          }
-        } else {
-          sdp += lines[i] + '\n';
-        }
-      }
-
-      return sdp;
-    }
-
-    function escapeRegExp(string) {
-      return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $& means the whole matched string
-    }
-
-    enumerateInputDevices();
-    window.start = start;
-    window.stop = stop;
-  </script>
+    </script>
 </body>
-
 </html>
