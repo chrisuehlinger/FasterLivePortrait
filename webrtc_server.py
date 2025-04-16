@@ -42,16 +42,27 @@ class ConnectionManager:
     def __init__(self):
         self.actor_connections: Dict[str, WebSocket] = {}
         self.viewer_connections: Dict[str, List[WebSocket]] = {}
-        self.latest_frames: Dict[str, np.ndarray] = {}
+        self.frame_queues: Dict[str, asyncio.Queue] = {}
         self.processed_frames: Dict[str, np.ndarray] = {}
         self.frame_processors: Dict[str, object] = {}
-        self.processing_locks: Dict[str, asyncio.Lock] = {}
+        self.is_processing: Dict[str, bool] = {}
+        self.frames_received: Dict[str, int] = {}
+        self.frames_processed: Dict[str, int] = {}
+        self.processing_tasks: Dict[str, asyncio.Task] = {}
         
     async def connect_actor(self, session_id: str, websocket: WebSocket):
         await websocket.accept()
         self.actor_connections[session_id] = websocket
-        self.processing_locks[session_id] = asyncio.Lock()
+        self.frame_queues[session_id] = asyncio.Queue(maxsize=1)  # Only store 1 frame
+        self.is_processing[session_id] = False
+        self.frames_received[session_id] = 0
+        self.frames_processed[session_id] = 0
         logger.info(f"Actor connected: {session_id}")
+        
+        # Start the processing task for this session
+        self.processing_tasks[session_id] = asyncio.create_task(
+            self._process_frames_loop(session_id)
+        )
         
     async def connect_viewer(self, session_id: str, websocket: WebSocket):
         await websocket.accept()
@@ -69,13 +80,30 @@ class ConnectionManager:
             del self.actor_connections[session_id]
             logger.info(f"Actor disconnected: {session_id}")
             
+            # Cancel the processing task
+            if session_id in self.processing_tasks:
+                self.processing_tasks[session_id].cancel()
+                del self.processing_tasks[session_id]
+            
             # Clean up related resources
-            if session_id in self.processing_locks:
-                del self.processing_locks[session_id]
-            if session_id in self.latest_frames:
-                del self.latest_frames[session_id]
+            if session_id in self.frame_queues:
+                # Clear any remaining frames
+                queue = self.frame_queues[session_id]
+                while not queue.empty():
+                    try:
+                        queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                del self.frame_queues[session_id]
+                
             if session_id in self.processed_frames:
                 del self.processed_frames[session_id]
+            if session_id in self.is_processing:
+                del self.is_processing[session_id]
+            if session_id in self.frames_received:
+                del self.frames_received[session_id]
+            if session_id in self.frames_processed:
+                del self.frames_processed[session_id]
             
     def disconnect_viewer(self, session_id: str, websocket: WebSocket):
         if session_id in self.viewer_connections:
@@ -91,25 +119,86 @@ class ConnectionManager:
                 # WebSocket was not in the list
                 pass
     
-    async def process_frame(self, session_id: str, frame: np.ndarray, processor):
-        """Process a frame and send it to all connected viewers for this session"""
-        try:
-            # Use a lock to prevent concurrent processing of frames for the same session
-            async with self.processing_locks[session_id]:
-                # Process the frame
-                processed_frame = processor.process_frame(frame)
-                
-                if processed_frame is not None:
-                    # Store the processed frame
-                    self.processed_frames[session_id] = processed_frame
-                    
-                    # Send to all viewers of this session
-                    await self.send_frame_to_viewers(processed_frame, session_id)
-                    
-                    return True
-        except Exception as e:
-            logger.error(f"Error processing frame for session {session_id}: {e}")
+    async def receive_frame(self, session_id: str, frame: np.ndarray):
+        """Handle a new frame from an actor"""
+        if session_id not in self.frame_queues:
             return False
+        
+        self.frames_received[session_id] += 1
+        
+        # Add to queue, replacing any existing frame
+        queue = self.frame_queues[session_id]
+        
+        # Clear the queue to make room for new frame
+        while not queue.empty():
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        
+        # Put the new frame
+        try:
+            await queue.put(frame)
+            return True
+        except Exception as e:
+            logger.error(f"Error adding frame to queue for session {session_id}: {e}")
+            return False
+    
+    async def _process_frames_loop(self, session_id: str):
+        """Background task to process frames for a session"""
+        try:
+            while session_id in self.actor_connections:
+                # Wait for a frame to be available
+                if session_id not in self.frame_queues:
+                    await asyncio.sleep(0.01)
+                    continue
+                
+                queue = self.frame_queues[session_id]
+                
+                try:
+                    # Get the next frame from the queue (will wait if queue is empty)
+                    frame = await queue.get()
+                    
+                    # Get the processor from the server
+                    processor = self.frame_processors.get(session_id)
+                    if not processor:
+                        await asyncio.sleep(0.01)
+                        continue
+                        
+                    # Process the frame
+                    self.is_processing[session_id] = True
+                    processed_frame = processor.process_frame(frame)
+                    
+                    if processed_frame is not None:
+                        # Store the processed frame
+                        self.processed_frames[session_id] = processed_frame
+                        
+                        # Send to all viewers of this session
+                        await self.send_frame_to_viewers(processed_frame, session_id)
+                        
+                        # Update stats
+                        self.frames_processed[session_id] += 1
+                        
+                        # Log stats occasionally
+                        if self.frames_processed[session_id] % 100 == 0:
+                            dropped = self.frames_received[session_id] - self.frames_processed[session_id]
+                            logger.info(f"Session {session_id}: Processed {self.frames_processed[session_id]} frames, " +
+                                       f"received {self.frames_received[session_id]} frames, dropped {dropped} frames " +
+                                       f"({dropped / self.frames_received[session_id]:.1%} drop rate)")
+                    
+                except asyncio.CancelledError:
+                    # Task is being cancelled
+                    break
+                except Exception as e:
+                    logger.error(f"Error processing frame for session {session_id}: {e}")
+                finally:
+                    self.is_processing[session_id] = False
+                    
+        except asyncio.CancelledError:
+            # Task is being cancelled
+            pass
+        except Exception as e:
+            logger.error(f"Error in process_frames_loop for session {session_id}: {e}")
             
     async def send_frame_to_viewers(self, frame: np.ndarray, session_id: str):
         """Send processed frame to all connected viewers for a specific session"""
@@ -380,6 +469,9 @@ class Server:
             try:
                 await self.connection_manager.connect_actor(session_id, websocket)
                 
+                # Register the processor for this session
+                self.connection_manager.frame_processors[session_id] = self.processor
+                
                 # Send a confirmation to the actor
                 await websocket.send_json({"status": "connected", "session_id": session_id})
                 
@@ -392,8 +484,8 @@ class Server:
                     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                     
                     if frame is not None:
-                        # Process the frame and send to viewers
-                        await self.connection_manager.process_frame(session_id, frame, self.processor)
+                        # Add frame to processing queue (will replace any pending frame)
+                        await self.connection_manager.receive_frame(session_id, frame)
                     
             except WebSocketDisconnect:
                 self.connection_manager.disconnect_actor(session_id)
