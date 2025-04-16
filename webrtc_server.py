@@ -223,61 +223,143 @@ class RTCVideoProcessor(MediaStreamTrack):
         self.processing = False
         self.latest_frame = None
         self.dropped_frames = 0
+        self.processed_frames = 0
         self.total_frames = 0
         self.last_stats_time = time.time()
         
+        # Track frame timestamps for rate calculations
+        self.last_frame_time = time.time()
+        self.input_fps = 0
+        self.input_frame_count = 0
+        self.input_fps_start_time = time.time()
+        
     async def recv(self):
+        frame = await self.track.recv()
         self.total_frames += 1
         
-        # Get frame from the original track
-        frame = await self.track.recv()
+        # Calculate input FPS (frames coming from WebRTC)
+        current_time = time.time()
+        self.input_frame_count += 1
+        if current_time - self.input_fps_start_time >= 1.0:
+            self.input_fps = self.input_frame_count
+            self.input_frame_count = 0
+            self.input_fps_start_time = current_time
         
-        # If we're currently processing a frame, store this one as latest and return original
-        if self.processing:
-            self.latest_frame = frame
-            self.dropped_frames += 1
-            return frame
-            
-        # Start processing
-        self.processing = True
+        # In single-threaded mode, processing state isn't concurrent - we need to compute
+        # dropped frames based on timing, not on buffer accumulation
+        if self.processed_frames > 0:  # After we've processed at least one frame
+            # Calculate expected frames since last processed frame
+            # based on the input frame rate (typically 30fps for webcams)
+            time_since_last_process = current_time - self.last_frame_time
+            expected_frames = max(0, round(time_since_last_process * self.input_fps) - 1)
+            self.dropped_frames += expected_frames
         
-        try:
-            # Check if we have a newer frame that came in while getting this one
-            process_frame = self.latest_frame if self.latest_frame else frame
-            self.latest_frame = None
+        # Store frame for processing
+        self.latest_frame = frame
+        
+        # If we can process this frame, do it now
+        if not self.processing:
+            self.processing = True
+            self.last_frame_time = current_time
             
-            # Convert to OpenCV format
-            img = process_frame.to_ndarray(format="bgr24")
-            
-            # Process the frame
-            processed_img = self.processor.process_frame(img)
-            
-            # If processing failed, use original frame
-            if processed_img is None:
-                processed_img = img
-            
-            # Log stats periodically
-            current_time = time.time()
-            if current_time - self.last_stats_time > 5.0:  # Every 5 seconds
-                drop_percentage = (self.dropped_frames / max(1, self.total_frames)) * 100
-                logger.info(f"Frame stats - Processed: {self.total_frames - self.dropped_frames}, " +
-                          f"Dropped: {self.dropped_frames} ({drop_percentage:.1f}%), " +
-                          f"Total: {self.total_frames}")
-                self.dropped_frames = 0
-                self.total_frames = 0
-                self.last_stats_time = current_time
-            
-            # Send the processed frame to all viewers via websocket
-            await self.connection_manager.send_frame_to_viewers(processed_img, self.session_id)
-            
-            # Convert back to VideoFrame
-            new_frame = VideoFrame.from_ndarray(processed_img, format="bgr24")
-            new_frame.pts = process_frame.pts
-            new_frame.time_base = process_frame.time_base
-            return new_frame
-        finally:
-            # End processing state
-            self.processing = False
+            try:
+                # IMPORTANT: Be explicit about frame format conversion
+                # Convert frame to numpy array with proper format
+                img = None
+                try:
+                    # Get frame in BGR24 format - standard for OpenCV processing
+                    img = frame.to_ndarray(format="bgr24")
+                except Exception as e:
+                    logger.error(f"Error converting frame: {e}")
+                    # Fallback to RGB format and convert if needed
+                    try:
+                        img = frame.to_ndarray(format="rgb24")
+                        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                    except Exception as e2:
+                        logger.error(f"Fallback conversion failed: {e2}")
+                        return frame
+                
+                if img is None or img.size == 0:
+                    logger.warning("Empty frame received")
+                    return frame
+                
+                # Make a clean copy for the thumbnail to avoid potential memory issues
+                driving_frame = img.copy()
+                
+                # Process the frame
+                processed_img = self.processor.process_frame(img)
+                
+                # If processing failed, use original frame
+                if processed_img is None:
+                    processed_img = img
+                
+                # Add thumbnail of driving frame to lower right corner
+                # Calculate thumbnail size (1/4 of the original size)
+                h, w = processed_img.shape[:2]
+                thumb_h, thumb_w = h // 4, w // 4
+                
+                # Resize driving frame to thumbnail size
+                thumbnail = cv2.resize(driving_frame, (thumb_w, thumb_h))
+                
+                # Calculate position for lower right corner
+                y_offset = h - thumb_h - 10  # 10px padding from bottom
+                x_offset = w - thumb_w - 10  # 10px padding from right
+                
+                # Add white border around thumbnail
+                cv2.rectangle(processed_img, (x_offset-2, y_offset-2), 
+                            (x_offset+thumb_w+2, y_offset+thumb_h+2), (255, 255, 255), 2)
+                
+                # Overlay the thumbnail on the processed image
+                processed_img[y_offset:y_offset+thumb_h, x_offset:x_offset+thumb_w] = thumbnail
+                
+                # Add "Input" label above thumbnail
+                cv2.putText(
+                    processed_img,
+                    "Input",
+                    (x_offset, y_offset-5),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (255, 255, 255),
+                    1
+                )
+                
+                # Update counters
+                self.processed_frames += 1
+                
+                # Log stats periodically
+                if current_time - self.last_stats_time > 5.0:  # Every 5 seconds
+                    process_rate = self.processed_frames / 5.0  # Processed FPS
+                    drop_rate = self.dropped_frames / 5.0      # Dropped FPS
+                    drop_percentage = 0
+                    if self.input_fps > 0:  # Avoid division by zero
+                        drop_percentage = (drop_rate / self.input_fps) * 100
+                        
+                    logger.info(f"Performance - Input: {self.input_fps} FPS, Processed: {process_rate:.1f} FPS, " +
+                              f"Dropped: ~{drop_rate:.1f} FPS ({drop_percentage:.1f}%)")
+                    
+                    # Reset counters for next interval
+                    self.dropped_frames = 0
+                    self.processed_frames = 0
+                    self.last_stats_time = current_time
+                
+                # Send the processed frame to all viewers via websocket
+                await self.connection_manager.send_frame_to_viewers(processed_img, self.session_id)
+                
+                # Convert back to VideoFrame - ensure we preserve format properly
+                new_frame = VideoFrame.from_ndarray(processed_img, format="bgr24")
+                new_frame.pts = frame.pts
+                new_frame.time_base = frame.time_base
+                return new_frame
+                
+            except Exception as e:
+                logger.error(f"Error in frame processing: {e}")
+                return frame
+            finally:
+                self.processing = False
+        
+        # If we couldn't process (in theory this shouldn't happen in single-threaded mode),
+        # return the original frame
+        return frame
 
 # Server application setup
 class Server:
