@@ -245,7 +245,7 @@ async def process_frames():
                         # logger.debug(f"Processing frame {live_portrait_pipeline.frame_id}") # Reduce log spam
                         # The run method expects BGR driving frame, RGB source image, and prepared source info
                         # It returns: dri_crop, out_crop, out_org, dri_motion_info
-                        # We want out_crop (index 1) instead of out_org (index 2)
+                        # We want out_org (index 2) instead of out_crop (index 1) # <-- Changed comment
                         result = live_portrait_pipeline.run(
                             driving_frame_bgr,
                             source_image_np, # Use the stored NumPy source image (RGB)
@@ -253,9 +253,16 @@ async def process_frames():
                             # first_frame is handled internally by the pipeline's frame_id counter
                         )
 
-                        # Use out_crop (result[1]) instead of out_org (result[2])
-                        if result and result[1] is not None: # Check if out_crop exists
-                            processed_frame_np_rgb = result[1] # This should be RGB
+                        # Use out_org (result[2]) instead of out_crop (result[1]) # <-- Changed comment
+                        if result and result[2] is not None: # Check if out_org exists # <-- Changed index from 1 to 2
+                            processed_frame_np_rgb = result[2] # This should be RGB # <-- Changed index from 1 to 2
+
+                            # +++ Debugging Logs +++
+                            logger.info(f"out_org frame - Shape: {processed_frame_np_rgb.shape}, Dtype: {processed_frame_np_rgb.dtype}, Min: {processed_frame_np_rgb.min()}, Max: {processed_frame_np_rgb.max()}")
+                            if np.all(processed_frame_np_rgb == 0):
+                                logger.warning("out_org frame appears to be completely black!")
+                            # +++ End Debugging Logs +++
+
                             processed_pil = Image.fromarray(processed_frame_np_rgb)
                             # logger.info(f"Frame {live_portrait_pipeline.frame_id-1} processed successfully.") # Reduce log spam
 

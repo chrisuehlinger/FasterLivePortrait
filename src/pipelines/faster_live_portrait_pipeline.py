@@ -473,7 +473,8 @@ class FasterLivePortraitPipeline:
 
             x_d_i_new = x_s + (x_d_i_new - x_s) * self.cfg.infer_params.driving_multiplier
             out_crop = self.model_dict["warping_spade"].predict(f_s, x_s, x_d_i_new)
-            if not realtime and self.cfg.infer_params.flag_pasteback and self.cfg.infer_params.flag_do_crop and self.cfg.infer_params.flag_stitching:
+            # Ensure pasteback happens if flags are set, regardless of realtime status
+            if self.cfg.infer_params.flag_pasteback and self.cfg.infer_params.flag_do_crop and self.cfg.infer_params.flag_stitching:
                 # TODO: pasteback is slow, considering optimize it using multi-threading or GPU
                 # I_p_pstbk = paste_back(out_crop, crop_info['M_c2o'], I_p_pstbk, mask_ori_float)
                 I_p_pstbk = paste_back_pytorch(out_crop, M, I_p_pstbk, mask_ori_float)
