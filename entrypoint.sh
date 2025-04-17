@@ -25,7 +25,5 @@ export LD_LIBRARY_PATH=/usr/local/tensorrt/lib:$LD_LIBRARY_PATH
 #  --dri_video assets/examples/driving/d14.mp4 \
 #  --cfg configs/trt_infer.yaml
 
-python server.py \
-  --cert-file certs/cert.pem \
-  --key-file certs/key.pem
+python server.py
   

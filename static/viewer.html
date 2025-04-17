@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Viewer View</title>
+    <style>
+        img { border: 1px solid black; max-width: 100%; height: auto; }
+    </style>
+</head>
+<body>
+    <h1>Viewer View - Receive Processed Video</h1>
+    <img id="processedImage" src="" alt="Processed Stream">
+    <p>Status: <span id="status">Idle</span></p>
+
+    <script>
+        const img = document.getElementById('processedImage');
+        const statusElem = document.getElementById('status');
+        let websocket = null;
+
+        function connectWebSocket() {
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+            const wsUrl = `${wsProtocol}://${window.location.host}/ws/viewer`;
+            websocket = new WebSocket(wsUrl);
+
+            websocket.onopen = () => {
+                console.log("Viewer WebSocket connected");
+                statusElem.textContent = "Connected, waiting for frames...";
+            };
+
+            websocket.onclose = (event) => {
+                console.log("Viewer WebSocket disconnected:", event.reason);
+                statusElem.textContent = "Disconnected";
+                 // Attempt to reconnect after a delay
+                setTimeout(connectWebSocket, 5000);
+            };
+
+            websocket.onerror = (error) => {
+                console.error("Viewer WebSocket error:", error);
+                statusElem.textContent = "Connection error";
+                // Handle error, maybe try reconnecting
+            };
+
+            websocket.onmessage = (event) => {
+                // Assuming server sends base64 encoded image data
+                if (typeof event.data === 'string') {
+                    img.src = 'data:image/jpeg;base64,' + event.data;
+                    statusElem.textContent = "Receiving frames...";
+                } else {
+                     console.log("Received non-string data:", event.data);
+                     // Handle binary data if server sends raw bytes (more complex)
+                     // const blob = new Blob([event.data], { type: 'image/jpeg' });
+                     // img.src = URL.createObjectURL(blob);
+                }
+            };
+        }
+
+        // Start connection on load
+        window.addEventListener('load', connectWebSocket);
+
+    </script>
+</body>
+</html>

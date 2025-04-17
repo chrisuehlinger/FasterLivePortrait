@@ -479,12 +479,99 @@ def paste_back(img_crop, M_c2o, img_ori, mask_ori):
     return result
 
 
-def paste_back_pytorch(img_crop, M_c2o, img_ori, mask_ori):
-    """paste back the image
+def paste_back_pytorch(img_crop, M, img_ori, mask_ori):
     """
-    dsize = (img_ori.shape[1], img_ori.shape[0])
-    img_crop = img_crop.permute(2, 0, 1).float()
-    img_back = _transform_img_torch(img_crop, M_c2o, dsize=dsize)
-    img_back = img_back.permute(1, 2, 0)
-    img_back = torch.clip(mask_ori * img_back + (1 - mask_ori) * img_ori, 0, 255)
-    return img_back
+    Pastes the cropped image back into the original image space using PyTorch for blending.
+
+    Args:
+        img_crop: The cropped image (Tensor or NumPy array).
+        M: The transformation matrix (NumPy array).
+        img_ori: The original image (Tensor or NumPy array).
+        mask_ori: The mask in the original image space (Tensor or NumPy array).
+
+    Returns:
+        The blended image (Tensor or NumPy array, matching img_ori's type).
+    """
+    # --- Start Modification ---
+    # Ensure M is on CPU before converting to numpy for np.linalg.inv
+    if isinstance(M, torch.Tensor):
+        M_np = M.detach().cpu().numpy()
+    else:
+        M_np = M # Assume it's already a numpy array if not a tensor
+    M_inv = np.linalg.inv(M_np)
+    # --- End Modification ---
+
+    h, w = img_ori.shape[:2] if isinstance(img_ori, np.ndarray) else (img_ori.shape[0], img_ori.shape[1])
+
+    # Warp the cropped image back using cv2 (expects numpy)
+    if isinstance(img_crop, torch.Tensor):
+        # Ensure img_crop is on CPU and is contiguous before converting to numpy
+        img_crop_np = img_crop.detach().cpu().contiguous().numpy()
+    else:
+        img_crop_np = img_crop
+    # Ensure img_crop_np is in a format cv2 understands (e.g., float32 or uint8)
+    if img_crop_np.dtype == np.float16:
+        img_crop_np = img_crop_np.astype(np.float32)
+
+    img_back_np = cv2.warpPerspective(img_crop_np, M_inv, (w, h))
+
+    # Determine target device
+    target_device = 'cpu'
+    if isinstance(img_crop, torch.Tensor) and img_crop.device != 'cpu':
+        target_device = img_crop.device
+    elif isinstance(img_ori, torch.Tensor) and img_ori.device != 'cpu':
+        target_device = img_ori.device
+    elif isinstance(mask_ori, torch.Tensor) and mask_ori.device != 'cpu':
+        target_device = mask_ori.device
+
+    # Convert all components to torch tensors on the target device
+    if isinstance(mask_ori, np.ndarray):
+        mask_ori_ts = torch.from_numpy(mask_ori).to(target_device)
+    else:
+        mask_ori_ts = mask_ori.to(target_device)
+
+    img_back_ts = torch.from_numpy(img_back_np).to(target_device)
+
+    if isinstance(img_ori, np.ndarray):
+        img_ori_ts = torch.from_numpy(img_ori).to(target_device)
+    else:
+        img_ori_ts = img_ori.to(target_device)
+
+    # Ensure mask_ori_ts has channel dim if needed (H, W) -> (H, W, 1)
+    if mask_ori_ts.dim() == 2:
+        mask_ori_ts = mask_ori_ts.unsqueeze(-1)
+
+    # --- Start Modification ---
+    # Ensure mask_ori_ts has the exact same H, W dimensions as img_ori_ts
+    # This addresses potential off-by-one errors from warpPerspective.
+    if mask_ori_ts.shape[0] != img_ori_ts.shape[0] or mask_ori_ts.shape[1] != img_ori_ts.shape[1]:
+        print(f"Warning: Resizing mask_ori in paste_back_pytorch from {mask_ori_ts.shape[:2]} to {img_ori_ts.shape[:2]}")
+        # Ensure mask is float for interpolation
+        mask_ori_ts = mask_ori_ts.float()
+        mask_ori_ts = F.interpolate(
+            mask_ori_ts.permute(2, 0, 1).unsqueeze(0), # HWC -> NCHW
+            size=(img_ori_ts.shape[0], img_ori_ts.shape[1]), # Target H, W
+            mode='nearest' # Nearest neighbor is suitable for masks
+        ).squeeze(0).permute(1, 2, 0) # NCHW -> HWC
+    # --- End Modification ---
+
+    # Ensure mask_ori_ts has the same number of channels as images by expanding
+    if mask_ori_ts.shape[-1] == 1 and img_back_ts.shape[-1] > 1:
+         mask_ori_ts = mask_ori_ts.expand_as(img_back_ts) # Expand mask channels
+
+    # Perform the blending operation
+    # Ensure all tensors have compatible types (e.g., float) for multiplication
+    img_back_ts = img_back_ts.to(torch.float32)
+    img_ori_ts = img_ori_ts.to(torch.float32)
+    mask_ori_ts = mask_ori_ts.to(torch.float32) # Already float if resized
+
+    img_blend = mask_ori_ts * img_back_ts + (1 - mask_ori_ts) * img_ori_ts
+    img_blend = torch.clip(img_blend, 0, 255)
+
+    # Convert back to numpy uint8 if the original img_ori was numpy
+    if isinstance(img_ori, np.ndarray):
+        img_blend_np = img_blend.cpu().numpy().astype(np.uint8)
+        return img_blend_np
+    else:
+        # Return tensor matching original img_ori type if it was tensor
+        return img_blend.to(img_ori.dtype)

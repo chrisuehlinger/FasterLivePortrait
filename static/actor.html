@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Actor View</title>
+    <style>
+        video, canvas { border: 1px solid black; }
+    </style>
+</head>
+<body>
+    <h1>Actor View - Send Video</h1>
+    <video id="video" width="640" height="480" autoplay playsinline></video>
+    <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
+    <button id="startButton">Start Sending</button>
+    <button id="stopButton" disabled>Stop Sending</button>
+    <p>Status: <span id="status">Idle</span></p>
+    <!-- Add elements to display stats -->
+    <div>
+        Server Processing Time: <span id="processing-time">N/A</span> ms
+    </div>
+    <div>
+        Server FPS: <span id="fps">N/A</span>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const context = canvas.getContext('2d');
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const statusElem = document.getElementById('status');
+        // Get references to the new stat elements
+        const processingTimeElem = document.getElementById('processing-time');
+        const fpsElem = document.getElementById('fps');
+        let websocket = null;
+        let stream = null;
+        let sendingInterval = null;
+        const FRAME_RATE = 15; // Send frames ~15 times per second
+
+        async function startCamera() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                video.srcObject = stream;
+                await video.play(); // Ensure video is playing before connecting
+                connectWebSocket();
+                startButton.disabled = true;
+                stopButton.disabled = false;
+                statusElem.textContent = "Camera started, connecting...";
+            } catch (err) {
+                console.error("Error accessing camera: ", err);
+                statusElem.textContent = "Error accessing camera";
+            }
+        }
+
+        function connectWebSocket() {
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+            const wsUrl = `${wsProtocol}://${window.location.host}/ws/actor`;
+            websocket = new WebSocket(wsUrl);
+
+            websocket.onopen = () => {
+                console.log("Actor WebSocket connected");
+                statusElem.textContent = "Connected, sending frames...";
+                startSendingFrames();
+            };
+
+            websocket.onclose = (event) => {
+                console.log("Actor WebSocket disconnected:", event.reason);
+                statusElem.textContent = "Disconnected";
+                stopSendingFrames(); // Clean up interval
+                startButton.disabled = false;
+                stopButton.disabled = true;
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                    video.srcObject = null;
+                    stream = null;
+                }
+                 // Attempt to reconnect after a delay
+                // setTimeout(connectWebSocket, 5000); // Optional: Add reconnect logic
+            };
+
+            websocket.onerror = (error) => {
+                console.error("Actor WebSocket error:", error);
+                statusElem.textContent = "Connection error";
+                // Handle error, maybe try reconnecting
+            };
+
+            // Modify onmessage to handle stats
+            websocket.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'stats') {
+                        if (processingTimeElem && data.processing_time_ms !== undefined) {
+                            processingTimeElem.textContent = data.processing_time_ms.toFixed(2);
+                        }
+                        if (fpsElem && data.fps !== undefined) {
+                            fpsElem.textContent = data.fps.toFixed(2);
+                        }
+                    } else {
+                        console.log("Received non-stats message:", data);
+                    }
+                } catch (error) {
+                    // Handle cases where the message might not be JSON
+                    console.log("Received non-JSON message or error parsing:", event.data, error);
+                }
+            };
+        }
+
+        function startSendingFrames() {
+            if (sendingInterval) clearInterval(sendingInterval); // Clear existing interval if any
+            sendingInterval = setInterval(() => {
+                if (websocket && websocket.readyState === WebSocket.OPEN && video.readyState >= 2) { // Check video is ready
+                    // Match canvas size to video intrinsic size if needed, or keep fixed
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    canvas.toBlob(blob => {
+                        if (blob) {
+                            websocket.send(blob);
+                        }
+                    }, 'image/jpeg', 0.8); // Send JPEG for efficiency
+                }
+            }, 1000 / FRAME_RATE);
+        }
+
+        function stopSendingFrames() {
+            if (sendingInterval) {
+                clearInterval(sendingInterval);
+                sendingInterval = null;
+            }
+            if (websocket) {
+                websocket.close();
+                websocket = null;
+            }
+             if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+                stream = null;
+            }
+            statusElem.textContent = "Stopped";
+            startButton.disabled = false;
+            stopButton.disabled = true;
+        }
+
+        startButton.onclick = startCamera;
+        stopButton.onclick = stopSendingFrames;
+
+        // Stop stream on page unload
+        window.addEventListener('beforeunload', stopSendingFrames);
+
+    </script>
+</body>
+</html>
