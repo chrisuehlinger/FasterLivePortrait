@@ -1,0 +1,34 @@
+{
+	"name": "FasterLivePortrait Development",
+	"dockerFile": "Dockerfile",
+	"runArgs": [
+		"--gpus=all",
+		"-v", "/tmp/.X11-unix:/tmp/.X11-unix",
+		"-e", "DISPLAY=${env:DISPLAY}",
+		"-e", "NVIDIA_VISIBLE_DEVICES=all",
+		"-e", "NVIDIA_DRIVER_CAPABILITIES=all",
+		"-e", "XAUTHORITY=${env:XAUTHORITY}",
+		"-v", "${env:XAUTHORITY}:${env:XAUTHORITY}",
+		"--network=host",
+		"--privileged"
+	],
+	"mounts": [
+		"source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
+	],
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-python.python",
+				"ms-python.vscode-pylance",
+				"ms-azuretools.vscode-docker"
+			]
+		}
+	},
+	"remoteUser": "root",
+	"remoteEnv": {
+		"LD_LIBRARY_PATH": "/usr/local/tensorrt/lib:${containerEnv:LD_LIBRARY_PATH}",
+		"CUDA_HOME": "/usr/local/cuda-11.8"
+	},
+	"postCreateCommand": "chmod +x .devcontainer/post-create.sh && ./.devcontainer/post-create.sh",
+	"forwardPorts": [9000]
+}
