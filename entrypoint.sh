@@ -12,7 +12,7 @@ export LD_LIBRARY_PATH=/usr/local/tensorrt/lib:$LD_LIBRARY_PATH
 #  --cfg configs/trt_infer.yaml
 
 # python run.py \
-#  --src_image assets/examples/source/s2.jpg \
+#  --src_image assets/examples/source/aztec-jaguar3.jpg \
 #  --dri_video 0 \
 #  --realtime \
 #  --cfg configs/trt_infer.yaml
@@ -25,9 +25,17 @@ export LD_LIBRARY_PATH=/usr/local/tensorrt/lib:$LD_LIBRARY_PATH
 #  --dri_video assets/examples/driving/d14.mp4 \
 #  --cfg configs/trt_infer.yaml
 
-python webrtc_server.py \
-  --port 9000 \
-  --source-image assets/examples/source/s2.jpg \
-  --config-path configs/onnx_infer.yaml \
-  --ssl-cert certs/cert.pem \
-  --ssl-key certs/key.pem
+python custom_landmark_demo.py \
+ --src_image assets/examples/source/s2.jpg \
+ --landmarks_path assets/examples/source/aztec-jaguar3.npy \
+ --dri_video 0 \
+ --realtime \
+ --cfg configs/trt_infer.yaml \
+ --no_crop
+
+# python webrtc_server.py \
+#   --port 9000 \
+#   --source-image assets/examples/source/s2.jpg \
+#   --config-path configs/onnx_infer.yaml \
+#   --ssl-cert certs/cert.pem \
+#   --ssl-key certs/key.pem

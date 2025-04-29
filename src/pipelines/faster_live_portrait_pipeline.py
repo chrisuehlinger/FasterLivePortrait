@@ -108,6 +108,7 @@ class FasterLivePortraitPipeline:
         self.src_infos = []
         self.src_imgs = []
         self.is_source_video = False
+        self.is_using_custom_landmarks = False  # Flag to indicate we're using custom landmarks
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
     def calc_combined_eye_ratio(self, c_d_eyes_i, source_lmk):
@@ -123,6 +124,18 @@ class FasterLivePortraitPipeline:
         # [c_s,lip, c_d,lip,i]
         combined_lip_ratio_tensor = np.concatenate([c_s_lip, c_d_lip_i], axis=1)  # 1x2
         return combined_lip_ratio_tensor
+
+    def calc_custom_eye_ratio(self):
+        """Calculate eye ratio specifically for custom landmarks scenario without detection"""
+        # Just use predefined values that are reasonable for most cases
+        lefteye_close_ratio = np.array([[0.25]])
+        righteye_close_ratio = np.array([[0.25]])
+        return np.concatenate([lefteye_close_ratio, righteye_close_ratio], axis=1)
+        
+    def calc_custom_lip_ratio(self):
+        """Calculate lip ratio specifically for custom landmarks scenario without detection"""
+        # Use a predefined value that's reasonable for most cases
+        return np.array([[0.30]])
 
     def prepare_source(self, source_path, **kwargs):
         print(f"process source:{source_path} >>>>>>>>")
@@ -263,6 +276,230 @@ class FasterLivePortraitPipeline:
                 self.src_infos.append(src_infos[:])
             print(f"finish process source:{source_path} >>>>>>>>")
             return len(self.src_infos) > 0
+        except Exception as e:
+            traceback.print_exc()
+            return False
+
+    def prepare_source_with_custom_landmarks(self, source_path, custom_landmarks, **kwargs):
+        """Process source image with manually provided landmarks
+        
+        Args:
+            source_path: Path to the source image
+            custom_landmarks: Numpy array of shape (N, 2) with facial landmarks coordinates
+            **kwargs: Additional arguments including flag_do_crop to control cropping
+            
+        Returns:
+            bool: Whether processing was successful
+        """
+        print(f"Processing source with custom landmarks: {source_path} >>>>>>>>")
+        print(f"Custom landmarks shape: {custom_landmarks.shape}, Type: {custom_landmarks.dtype}")
+        print(f"First 3 landmarks: {custom_landmarks[:3]}")
+        try:
+            # Source image processing
+            self.is_source_video = False  # Only support single images with custom landmarks
+            self.src_imgs = []
+            self.src_infos = []
+            self.source_path = source_path
+            
+            # Flag that we're using custom landmarks - this is important for the run method
+            self.is_using_custom_landmarks = True
+            
+            # Load source image
+            img_bgr = cv2.imread(source_path, cv2.IMREAD_COLOR)
+            if img_bgr is None:
+                print(f"Failed to load image: {source_path}")
+                return False
+                
+            img_bgr = resize_to_limit(img_bgr, self.cfg.infer_params.source_max_dim,
+                                      self.cfg.infer_params.source_division)
+            img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            print(f"Source image shape: {img_rgb.shape}")
+            self.src_imgs.append(img_rgb)
+            
+            # Use the provided landmarks instead of face detection
+            lmk = custom_landmarks.copy()  # Use a copy to avoid modifying the original
+            print(f"Using landmarks with shape: {lmk.shape}")
+            
+            # Check if we should crop the face or use the full image
+            flag_do_crop = kwargs.get("flag_do_crop", self.cfg.infer_params.flag_do_crop)
+            
+            if flag_do_crop:
+                print("Cropping source image based on landmarks")
+                # Crop face using custom landmarks
+                ret_dct = crop_image(
+                    img_rgb,
+                    lmk,
+                    dsize=self.cfg.crop_params.src_dsize,
+                    scale=self.cfg.crop_params.src_scale,
+                    vx_ratio=self.cfg.crop_params.src_vx_ratio,
+                    vy_ratio=self.cfg.crop_params.src_vy_ratio,
+                )
+                
+                # IMPORTANT FIX: Use pt_crop instead of lmk_crop for the transformed landmarks
+                # The crop_image function returns the transformed landmarks in 'pt_crop' key
+                source_lmk = ret_dct["pt_crop"].copy()
+                print(f"Using transformed landmarks from crop_image: {source_lmk.shape}")
+                print(f"First 3 transformed landmarks: {source_lmk[:3]}")
+                
+                # Create 256x256 version for network input
+                img_crop_256x256 = cv2.resize(
+                    ret_dct["img_crop"], (256, 256), interpolation=cv2.INTER_AREA
+                )
+                ret_dct["img_crop_256x256"] = img_crop_256x256
+                
+                # Store cropped image
+                img_crop = ret_dct["img_crop"]
+                
+                # Store crop transformation matrices for later use
+                M_c2o = ret_dct["M_c2o"]
+                M_o2c = ret_dct["M_o2c"]
+                
+                print(f"After cropping: source_lmk shape: {source_lmk.shape}")
+                print(f"First 3 points after cropping: {source_lmk[:3]}")
+            else:
+                print("Using full source image (no cropping)")
+                # Skip cropping, use the full image
+                h, w = img_rgb.shape[:2]
+                
+                # Preserve original landmarks exactly without any transformation
+                # This is critical for proper landmark alignment when not cropping
+                source_lmk = custom_landmarks.copy()
+                print(f"No crop - preserved landmarks: {source_lmk.shape}")
+                print(f"First 3 points in preserved landmarks: {source_lmk[:3]}")
+                
+                # Resize to 256x256 for network input while preserving aspect ratio
+                if h > w:
+                    new_h = 256
+                    new_w = int(w * (256 / h))
+                else:
+                    new_w = 256
+                    new_h = int(h * (256 / w))
+                
+                print(f"Resized dimensions for network input: {new_w}x{new_h}")
+                
+                # Create a black 256x256 image and place the resized image in the center
+                img_crop_256x256 = np.zeros((256, 256, 3), dtype=np.uint8)
+                resized = cv2.resize(img_rgb, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                offset_x = (256 - new_w) // 2
+                offset_y = (256 - new_h) // 2
+                img_crop_256x256[offset_y:offset_y+new_h, offset_x:offset_x+new_w] = resized
+                
+                # Use original image as "cropped" image
+                img_crop = img_rgb.copy()
+                
+                # Create identity transformation matrices
+                M_o2c = np.eye(3, dtype=np.float32)
+                M_c2o = np.eye(3, dtype=np.float32)
+            
+            # Extract motion parameters
+            print(f"Running motion_extractor on img_crop_256x256 with shape: {img_crop_256x256.shape}")
+            pitch, yaw, roll, t, exp, scale, kp = self.model_dict["motion_extractor"].predict(
+                img_crop_256x256)
+            
+            # Store source info
+            src_infos = [[]]
+            x_s_info = {
+                "pitch": pitch,
+                "yaw": yaw,
+                "roll": roll,
+                "t": t,
+                "exp": exp,
+                "scale": scale,
+                "kp": kp
+            }
+            print(f"Motion parameters - scale: {scale.shape}, exp: {exp.shape}, kp: {kp.shape}")
+            src_infos[0].append(copy.deepcopy(x_s_info))
+            
+            # Calculate additional parameters
+            x_c_s = kp
+            R_s = get_rotation_matrix(pitch, yaw, roll)
+            print(f"Running app_feat_extractor on img_crop_256x256")
+            f_s = self.model_dict["app_feat_extractor"].predict(img_crop_256x256)
+            x_s = transform_keypoint(pitch, yaw, roll, t, exp, scale, kp)
+            print(f"Transformed keypoints shape: {x_s.shape}")
+            print(f"Storing source_lmk with shape: {source_lmk.shape}")
+            src_infos[0].extend([source_lmk.copy(), R_s.copy(), f_s.copy(), x_s.copy(), x_c_s.copy()])
+            
+            # Handle lip normalization if needed
+            flag_lip_zero = self.cfg.infer_params.flag_normalize_lip  # not overwrite
+            if flag_lip_zero:
+                c_d_lip_before_animation = [0.05]
+                print(f"Calculating lip ratio using source_lmk: {source_lmk.shape}")
+                combined_lip_ratio_tensor_before_animation = self.calc_combined_lip_ratio(
+                    c_d_lip_before_animation, source_lmk.copy())
+                    
+                if combined_lip_ratio_tensor_before_animation[0][0] < self.cfg.infer_params.lip_normalize_threshold:
+                    flag_lip_zero = False
+                    src_infos[0].append(None)
+                    src_infos[0].append(flag_lip_zero)
+                else:
+                    lip_delta_before_animation = self.model_dict['stitching_lip_retarget'].predict(
+                        concat_feat(x_s, combined_lip_ratio_tensor_before_animation))
+                    src_infos[0].append(lip_delta_before_animation.copy())
+                    src_infos[0].append(flag_lip_zero)
+            else:
+                src_infos[0].append(None)
+                src_infos[0].append(flag_lip_zero)
+            
+            # Update flag_do_crop in the config for later use
+            self.cfg.infer_params.flag_do_crop = flag_do_crop
+            
+            # Prepare for pasteback if needed
+            if self.cfg.infer_params.flag_pasteback and flag_do_crop and self.cfg.infer_params.flag_stitching:
+                mask_ori_float = prepare_paste_back(self.mask_crop, M_c2o,
+                                                  dsize=(img_rgb.shape[1], img_rgb.shape[0]))
+                mask_ori_float = torch.from_numpy(mask_ori_float).to(self.device)
+                src_infos[0].append(mask_ori_float)
+            else:
+                src_infos[0].append(None)
+                
+            M = torch.from_numpy(M_c2o).to(self.device)
+            src_infos[0].append(M)
+            
+            # Store processed info
+            self.src_infos.append(src_infos)
+            
+            # Print debug info of what's stored
+            print(f"Stored src_infos structure:") 
+            print(f"- src_infos[0][0]: Motion info dict")
+            print(f"- src_infos[0][1]: Source landmarks shape: {src_infos[0][1].shape}")
+            print(f"- First 3 landmarks in stored data: {src_infos[0][1][:3]}")
+            
+            print(f"Finished processing source with custom landmarks: {source_path} >>>>>>>>")
+            return len(self.src_infos) > 0
+        except Exception as e:
+            traceback.print_exc()
+            return False
+            
+    def prepare_source_with_custom_appearance(self, source_path, custom_landmarks, appearance_features=None, **kwargs):
+        """Process source image with manually provided landmarks and optionally appearance features
+        
+        Args:
+            source_path: Path to the source image
+            custom_landmarks: Numpy array of shape (N, 2) with facial landmarks coordinates
+            appearance_features: Optional pre-computed appearance features
+            **kwargs: Additional arguments
+            
+        Returns:
+            bool: Whether processing was successful
+        """
+        print(f"Processing source with custom appearance data: {source_path} >>>>>>>>")
+        try:
+            success = self.prepare_source_with_custom_landmarks(source_path, custom_landmarks, **kwargs)
+            if not success:
+                return False
+                
+            # If appearance features are provided, replace the computed ones
+            if appearance_features is not None:
+                # Ensure dimensions match
+                if appearance_features.shape != self.src_infos[0][0][3].shape:
+                    print(f"Error: Provided appearance features shape {appearance_features.shape} doesn't match expected {self.src_infos[0][0][3].shape}")
+                    return False
+                    
+                # Replace the computed features with the provided ones
+                self.src_infos[0][0][3] = appearance_features.copy()
+                
+            return True
         except Exception as e:
             traceback.print_exc()
             return False
@@ -484,87 +721,141 @@ class FasterLivePortraitPipeline:
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         I_p_pstbk = torch.from_numpy(img_src).to(self.device).float()
         realtime = kwargs.get("realtime", False)
-        if self.cfg.infer_params.flag_crop_driving_video:
-            if self.src_lmk_pre is None:
-                src_face = self.model_dict["face_analysis"].predict(img_bgr)
-                if len(src_face) == 0:
-                    return None, None, None, None
-                lmk = src_face[0]
-                lmk = self.model_dict["landmark"].predict(img_rgb, lmk)
-                self.src_lmk_pre = lmk.copy()
-            else:
-                lmk = self.model_dict["landmark"].predict(img_rgb, self.src_lmk_pre)
-                self.src_lmk_pre = lmk.copy()
-
-            ret_bbox = parse_bbox_from_landmark(
-                lmk,
-                scale=self.cfg.crop_params.dri_scale,
-                vx_ratio_crop_video=self.cfg.crop_params.dri_vx_ratio,
-                vy_ratio=self.cfg.crop_params.dri_vy_ratio,
-            )["bbox"]
-            global_bbox = [
-                ret_bbox[0, 0],
-                ret_bbox[0, 1],
-                ret_bbox[2, 0],
-                ret_bbox[2, 1],
-            ]
-            ret_dct = crop_image_by_bbox(
-                img_rgb,
-                global_bbox,
-                lmk=lmk,
-                dsize=kwargs.get("dsize", 512),
-                flag_rot=False,
-                borderValue=(0, 0, 0),
-            )
-            lmk_crop = ret_dct["lmk_crop"]
-            img_crop = ret_dct["img_crop"]
-            img_crop = cv2.resize(img_crop, (256, 256))
-        else:
-            if self.src_lmk_pre is None:
-                src_face = self.model_dict["face_analysis"].predict(img_bgr)
-                if len(src_face) == 0:
-                    return None, None, None, None
-                lmk = src_face[0]
-                lmk = self.model_dict["landmark"].predict(img_rgb, lmk)
-                self.src_lmk_pre = lmk.copy()
-            else:
-                lmk = self.model_dict["landmark"].predict(img_rgb, self.src_lmk_pre)
-                self.src_lmk_pre = lmk.copy()
-            lmk_crop = lmk.copy()
+        
+        # Check if we're using custom landmarks - if so, use a different approach
+        if hasattr(self, 'is_using_custom_landmarks') and self.is_using_custom_landmarks:
+            print("Using custom landmarks for driving animation")
+            
+            # Get the source landmarks from the stored info
+            source_lmk = src_info[0][1]  # The landmarks are stored at index 1
+            
+            # Resize the driving frame for motion extraction
             img_crop = cv2.resize(img_rgb, (256, 256))
+            
+            # Extract motion parameters without relying on separate face detection
+            pitch, yaw, roll, t, exp, scale, kp = self.model_dict["motion_extractor"].predict(img_crop)
+            
+            # Use fixed ratios instead of trying to calculate from landmarks
+            # This avoids the problem of landmarks not matching the expected format
+            input_eye_ratio = self.calc_custom_eye_ratio()
+            input_lip_ratio = self.calc_custom_lip_ratio()
+            
+            x_d_i_info = {
+                "pitch": pitch,
+                "yaw": yaw,
+                "roll": roll,
+                "t": t,
+                "exp": exp,
+                "scale": scale,
+                "kp": kp
+            }
+            
+            R_d_i = get_rotation_matrix(pitch, yaw, roll)
+            x_d_i_info["R"] = R_d_i
+            x_d_i_info_copy = copy.deepcopy(x_d_i_info)
+            for key in x_d_i_info_copy:
+                x_d_i_info_copy[key] = x_d_i_info_copy[key].astype(np.float32)
+            dri_motion_info = [x_d_i_info_copy, copy.deepcopy(input_eye_ratio.astype(np.float32)),
+                            copy.deepcopy(input_lip_ratio.astype(np.float32))]
+            
+            if kwargs.get("first_frame", False) or self.R_d_0 is None:
+                self.frame_id = 0
+                self.R_d_0 = R_d_i.copy()
+                self.x_d_0_info = copy.deepcopy(x_d_i_info)
+                # realtime smooth
+                self.R_d_smooth = utils.OneEuroFilter(4, 0.3)
+                self.exp_smooth = utils.OneEuroFilter(4, 0.3)
+                
+            R_d_0 = self.R_d_0.copy()
+            x_d_0_info = copy.deepcopy(self.x_d_0_info)
+            out_crop, I_p_pstbk = self._run(src_info, x_d_i_info, x_d_0_info, R_d_i, R_d_0, realtime, input_eye_ratio,
+                                            input_lip_ratio, I_p_pstbk, **kwargs)
+                
+            return img_crop, out_crop, I_p_pstbk, dri_motion_info
+        
+        # Original method for standard (non-custom landmark) operation
+        else:
+            if self.cfg.infer_params.flag_crop_driving_video:
+                if self.src_lmk_pre is None:
+                    src_face = self.model_dict["face_analysis"].predict(img_bgr)
+                    if len(src_face) == 0:
+                        return None, None, None, None
+                    lmk = src_face[0]
+                    lmk = self.model_dict["landmark"].predict(img_rgb, lmk)
+                    self.src_lmk_pre = lmk.copy()
+                else:
+                    lmk = self.model_dict["landmark"].predict(img_rgb, self.src_lmk_pre)
+                    self.src_lmk_pre = lmk.copy()
 
-        input_eye_ratio = calc_eye_close_ratio(lmk_crop[None])
-        input_lip_ratio = calc_lip_close_ratio(lmk_crop[None])
-        pitch, yaw, roll, t, exp, scale, kp = self.model_dict["motion_extractor"].predict(img_crop)
-        x_d_i_info = {
-            "pitch": pitch,
-            "yaw": yaw,
-            "roll": roll,
-            "t": t,
-            "exp": exp,
-            "scale": scale,
-            "kp": kp
-        }
-        R_d_i = get_rotation_matrix(pitch, yaw, roll)
-        x_d_i_info["R"] = R_d_i
-        x_d_i_info_copy = copy.deepcopy(x_d_i_info)
-        for key in x_d_i_info_copy:
-            x_d_i_info_copy[key] = x_d_i_info_copy[key].astype(np.float32)
-        dri_motion_info = [x_d_i_info_copy, copy.deepcopy(input_eye_ratio.astype(np.float32)),
-                           copy.deepcopy(input_lip_ratio.astype(np.float32))]
-        if kwargs.get("first_frame", False) or self.R_d_0 is None:
-            self.frame_id = 0
-            self.R_d_0 = R_d_i.copy()
-            self.x_d_0_info = copy.deepcopy(x_d_i_info)
-            # realtime smooth
-            self.R_d_smooth = utils.OneEuroFilter(4, 0.3)
-            self.exp_smooth = utils.OneEuroFilter(4, 0.3)
-        R_d_0 = self.R_d_0.copy()
-        x_d_0_info = copy.deepcopy(self.x_d_0_info)
-        out_crop, I_p_pstbk = self._run(src_info, x_d_i_info, x_d_0_info, R_d_i, R_d_0, realtime, input_eye_ratio,
+                ret_bbox = parse_bbox_from_landmark(
+                    lmk,
+                    scale=self.cfg.crop_params.dri_scale,
+                    vx_ratio_crop_video=self.cfg.crop_params.dri_vx_ratio,
+                    vy_ratio=self.cfg.crop_params.dri_vy_ratio,
+                )["bbox"]
+                global_bbox = [
+                    ret_bbox[0, 0],
+                    ret_bbox[0, 1],
+                    ret_bbox[2, 0],
+                    ret_bbox[2, 1],
+                ]
+                ret_dct = crop_image_by_bbox(
+                    img_rgb,
+                    global_bbox,
+                    lmk=lmk,
+                    dsize=kwargs.get("dsize", 512),
+                    flag_rot=False,
+                    borderValue=(0, 0, 0),
+                )
+                lmk_crop = ret_dct["lmk_crop"]
+                img_crop = ret_dct["img_crop"]
+                img_crop = cv2.resize(img_crop, (256, 256))
+            else:
+                if self.src_lmk_pre is None:
+                    src_face = self.model_dict["face_analysis"].predict(img_bgr)
+                    if len(src_face) == 0:
+                        return None, None, None, None
+                    lmk = src_face[0]
+                    lmk = self.model_dict["landmark"].predict(img_rgb, lmk)
+                    self.src_lmk_pre = lmk.copy()
+                else:
+                    lmk = self.model_dict["landmark"].predict(img_rgb, self.src_lmk_pre)
+                    self.src_lmk_pre = lmk.copy()
+                lmk_crop = lmk.copy()
+                img_crop = cv2.resize(img_rgb, (256, 256))
+
+            input_eye_ratio = calc_eye_close_ratio(lmk_crop[None])
+            input_lip_ratio = calc_lip_close_ratio(lmk_crop[None])
+            pitch, yaw, roll, t, exp, scale, kp = self.model_dict["motion_extractor"].predict(img_crop)
+            x_d_i_info = {
+                "pitch": pitch,
+                "yaw": yaw,
+                "roll": roll,
+                "t": t,
+                "exp": exp,
+                "scale": scale,
+                "kp": kp
+            }
+            R_d_i = get_rotation_matrix(pitch, yaw, roll)
+            x_d_i_info["R"] = R_d_i
+            x_d_i_info_copy = copy.deepcopy(x_d_i_info)
+            for key in x_d_i_info_copy:
+                x_d_i_info_copy[key] = x_d_i_info_copy[key].astype(np.float32)
+            dri_motion_info = [x_d_i_info_copy, copy.deepcopy(input_eye_ratio.astype(np.float32)),
+                            copy.deepcopy(input_lip_ratio.astype(np.float32))]
+            if kwargs.get("first_frame", False) or self.R_d_0 is None:
+                self.frame_id = 0
+                self.R_d_0 = R_d_i.copy()
+                self.x_d_0_info = copy.deepcopy(x_d_i_info)
+                # realtime smooth
+                self.R_d_smooth = utils.OneEuroFilter(4, 0.3)
+                self.exp_smooth = utils.OneEuroFilter(4, 0.3)
+            R_d_0 = self.R_d_0.copy()
+            x_d_0_info = copy.deepcopy(self.x_d_0_info)
+            out_crop, I_p_pstbk = self._run(src_info, x_d_i_info, x_d_0_info, R_d_i, R_d_0, realtime, input_eye_ratio,
                                         input_lip_ratio,
                                         I_p_pstbk, **kwargs)
-        return img_crop, out_crop, I_p_pstbk, dri_motion_info
+            return img_crop, out_crop, I_p_pstbk, dri_motion_info
 
     def run_with_pkl(self, dri_motion_info, img_src, src_info, **kwargs):
         I_p_pstbk = torch.from_numpy(img_src).to(self.device).float()

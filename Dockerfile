@@ -122,6 +122,7 @@ COPY ./assets /root/FasterLivePortrait/assets
 COPY ./entrypoint.sh /root/FasterLivePortrait/entrypoint.sh
 COPY ./webrtc_server.py /root/FasterLivePortrait/webrtc_server.py
 COPY ./run.py /root/FasterLivePortrait/run.py
+COPY ./custom_landmark_demo.py /root/FasterLivePortrait/custom_landmark_demo.py
 
 ENTRYPOINT [ "./entrypoint.sh" ]
 # CMD /bin/bash
