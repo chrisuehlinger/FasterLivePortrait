@@ -25,9 +25,18 @@ export LD_LIBRARY_PATH=/usr/local/tensorrt/lib:$LD_LIBRARY_PATH
 #  --dri_video assets/examples/driving/d14.mp4 \
 #  --cfg configs/trt_infer.yaml
 
-python webrtc_server.py \
-  --port 9000 \
-  --source-image assets/examples/source/s2.jpg \
-  --config-path configs/onnx_infer.yaml \
-  --ssl-cert certs/cert.pem \
-  --ssl-key certs/key.pem
+# python webrtc_server.py \
+#   --port 9000 \
+#   --source-image assets/examples/source/s2.jpg \
+#   --config-path configs/onnx_infer.yaml \
+#   --ssl-cert certs/cert.pem \
+#   --ssl-key certs/key.pem
+
+python run.py \
+ --src_image assets/examples/source/chac-bolay-jaguar1.png \
+ --custom_landmarks assets/examples/source/chac-bolay-jaguar1.npy \
+ --dri_video 0 \
+ --realtime \
+ --cfg configs/trt_infer.yaml \
+ --no-crop
+

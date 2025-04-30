@@ -116,8 +116,25 @@ def run_with_video(args):
     infer_cfg = OmegaConf.load(args.cfg)
     infer_cfg.infer_params.flag_pasteback = args.paste_back
 
+    # Load custom landmarks if provided
+    custom_landmarks = None
+    if args.custom_landmarks:
+        if not os.path.exists(args.custom_landmarks):
+            print(f"Custom landmarks file {args.custom_landmarks} doesn't exist! Exiting.")
+            exit(1)
+        print(f"Loading custom landmarks from {args.custom_landmarks}")
+        if args.custom_landmarks.endswith('.npy'):
+            custom_landmarks = np.load(args.custom_landmarks)
+        elif args.custom_landmarks.endswith('.pkl'):
+            with open(args.custom_landmarks, 'rb') as f:
+                custom_landmarks = pickle.load(f)
+        else:
+            print(f"Unsupported landmarks file format. Please use .npy or .pkl. Exiting.")
+            exit(1)
+        print(f"Custom landmarks loaded with shape: {custom_landmarks.shape if hasattr(custom_landmarks, 'shape') else 'unknown'}")
+
     pipe = FasterLivePortraitPipeline(cfg=infer_cfg, is_animal=args.animal)
-    ret = pipe.prepare_source(args.src_image, realtime=args.realtime)
+    ret = pipe.prepare_source(args.src_image, custom_landmarks=custom_landmarks, realtime=args.realtime, no_crop=args.no_crop)
     if not ret:
         print(f"no face in {args.src_image}! exit!")
         exit(1)
@@ -281,8 +298,25 @@ def run_with_pkl(args):
     infer_cfg = OmegaConf.load(args.cfg)
     infer_cfg.infer_params.flag_pasteback = args.paste_back
 
+    # Load custom landmarks if provided
+    custom_landmarks = None
+    if args.custom_landmarks:
+        if not os.path.exists(args.custom_landmarks):
+            print(f"Custom landmarks file {args.custom_landmarks} doesn't exist! Exiting.")
+            exit(1)
+        print(f"Loading custom landmarks from {args.custom_landmarks}")
+        if args.custom_landmarks.endswith('.npy'):
+            custom_landmarks = np.load(args.custom_landmarks)
+        elif args.custom_landmarks.endswith('.pkl'):
+            with open(args.custom_landmarks, 'rb') as f:
+                custom_landmarks = pickle.load(f)
+        else:
+            print(f"Unsupported landmarks file format. Please use .npy or .pkl. Exiting.")
+            exit(1)
+        print(f"Custom landmarks loaded with shape: {custom_landmarks.shape if hasattr(custom_landmarks, 'shape') else 'unknown'}")
+
     pipe = FasterLivePortraitPipeline(cfg=infer_cfg, is_animal=args.animal)
-    ret = pipe.prepare_source(args.src_image, realtime=args.realtime)
+    ret = pipe.prepare_source(args.src_image, custom_landmarks=custom_landmarks, realtime=args.realtime, no_crop=args.no_crop)
     if not ret:
         print(f"no face in {args.src_image}! exit!")
         return
@@ -461,6 +495,9 @@ if __name__ == '__main__':
     parser.add_argument('--realtime', action='store_true', help='realtime inference')
     parser.add_argument('--animal', action='store_true', help='use animal model')
     parser.add_argument('--paste_back', action='store_true', default=False, help='paste back to origin image')
+    parser.add_argument('--custom_landmarks', type=str, default=None, 
+                        help='Path to a .npy or .pkl file containing custom landmarks in insightface format')
+    parser.add_argument('--no-crop', action='store_true', help='Prevent cropping of the source image')
     args, unknown = parser.parse_known_args()
 
     if args.dri_video.endswith(".pkl"):

@@ -124,7 +124,7 @@ class FasterLivePortraitPipeline:
         combined_lip_ratio_tensor = np.concatenate([c_s_lip, c_d_lip_i], axis=1)  # 1x2
         return combined_lip_ratio_tensor
 
-    def prepare_source(self, source_path, **kwargs):
+    def prepare_source(self, source_path, custom_landmarks=None, **kwargs):
         print(f"process source:{source_path} >>>>>>>>")
         try:
             if utils.is_video(source_path):
@@ -149,6 +149,20 @@ class FasterLivePortraitPipeline:
             self.src_infos = []
             self.source_path = source_path
 
+            # If custom landmarks provided, convert to appropriate format if necessary
+            has_custom_landmarks = custom_landmarks is not None
+            if has_custom_landmarks and not self.is_animal:
+                # Convert custom landmarks to numpy array if it's not already
+                if isinstance(custom_landmarks, torch.Tensor):
+                    custom_landmarks = custom_landmarks.cpu().numpy()
+                elif not isinstance(custom_landmarks, np.ndarray):
+                    custom_landmarks = np.array(custom_landmarks)
+
+            # Check if we should skip cropping
+            no_crop = kwargs.get("no_crop", False)
+            if no_crop:
+                print("No-crop mode enabled: Using full source image without cropping")
+
             for ii, img_bgr in tqdm(enumerate(src_imgs_bgr), total=len(src_imgs_bgr)):
                 img_bgr = resize_to_limit(img_bgr, self.cfg.infer_params.source_max_dim,
                                           self.cfg.infer_params.source_division)
@@ -169,36 +183,85 @@ class FasterLivePortraitPipeline:
                     self.src_imgs.append(img_rgb)
                     src_faces.append(lmk)
                 else:
-                    src_faces = self.model_dict["face_analysis"].predict(img_bgr)
-                    if len(src_faces) == 0:
-                        print("No face detected in the this image.")
-                        continue
-                    self.src_imgs.append(img_rgb)
+                    # Use custom landmarks if provided, otherwise use face detection
+                    if has_custom_landmarks:
+                        self.src_imgs.append(img_rgb)
+                        # For single image, use the provided landmarks
+                        # For video, we'd need an array of landmarks for each frame
+                        if self.is_source_video and isinstance(custom_landmarks, list):
+                            src_faces.append(custom_landmarks[ii] if ii < len(custom_landmarks) else custom_landmarks[-1])
+                        else:
+                            src_faces.append(custom_landmarks)
+                    else:
+                        src_faces = self.model_dict["face_analysis"].predict(img_bgr)
+                        if len(src_faces) == 0:
+                            print("No face detected in the this image.")
+                            continue
+                        self.src_imgs.append(img_rgb)
                     # 如果是实时，只关注最大的那张脸
-                    if kwargs.get("realtime", False):
+                    if kwargs.get("realtime", False) and not has_custom_landmarks:
                         src_faces = src_faces[:1]
 
                 crop_infos = []
                 for i in range(len(src_faces)):
                     # NOTE: temporarily only pick the first face, to support multiple face in the future
                     lmk = src_faces[i]
-                    # crop the face
-                    ret_dct = crop_image(
-                        img_rgb,  # ndarray
-                        lmk,  # 106x2 or Nx2
-                        dsize=self.cfg.crop_params.src_dsize,
-                        scale=self.cfg.crop_params.src_scale,
-                        vx_ratio=self.cfg.crop_params.src_vx_ratio,
-                        vy_ratio=self.cfg.crop_params.src_vy_ratio,
-                    )
-                    if self.is_animal:
-                        ret_dct["lmk_crop"] = lmk
+                    
+                    if no_crop:
+                        # Skip cropping and use full image with landmarks
+                        h, w = img_rgb.shape[:2]
+                        # Create a dummy crop_info with the full image
+                        ret_dct = {
+                            "img_crop": img_rgb.copy(),
+                            "M_c2o": np.eye(3),  # Identity matrix - no transformation
+                        }
+                        if self.is_animal:
+                            ret_dct["lmk_crop"] = lmk
+                        else:
+                            # Still get landmarks but don't crop
+                            lmk = self.model_dict["landmark"].predict(img_rgb, lmk)
+                            ret_dct["lmk_crop"] = lmk
+                            
+                            # Calculate scaled landmarks for 256x256 version with proper aspect ratio handling
+                            # Need to account for the actual resize operation that maintains aspect ratio
+                            scale_w = 256 / w
+                            scale_h = 256 / h
+                            resize_scale = min(scale_w, scale_h)
+                            
+                            # Calculate padding/offset for the non-dominant dimension
+                            if scale_w < scale_h:  # Width is the constraint, height gets padding
+                                new_h = int(h * resize_scale)
+                                pad_top = (256 - new_h) // 2
+                                pad_left = 0
+                            else:  # Height is the constraint, width gets padding
+                                new_w = int(w * resize_scale)
+                                pad_left = (256 - new_w) // 2
+                                pad_top = 0
+                                
+                            # Scale landmarks to match how cv2.resize(img_rgb, (256, 256), interpolation=cv2.INTER_AREA) works
+                            lmk_256x256 = lmk.copy()
+                            lmk_256x256[:, 0] = lmk[:, 0] * resize_scale + pad_left  # x coords
+                            lmk_256x256[:, 1] = lmk[:, 1] * resize_scale + pad_top   # y coords
+                            
+                            ret_dct["lmk_crop_256x256"] = lmk_256x256
                     else:
-                        lmk = self.model_dict["landmark"].predict(img_rgb, lmk)
-                        ret_dct["lmk_crop"] = lmk
-                        ret_dct["lmk_crop_256x256"] = ret_dct["lmk_crop"] * 256 / self.cfg.crop_params.src_dsize
+                        # Normal path - crop the face
+                        ret_dct = crop_image(
+                            img_rgb,  # ndarray
+                            lmk,  # 106x2 or Nx2
+                            dsize=self.cfg.crop_params.src_dsize,
+                            scale=self.cfg.crop_params.src_scale,
+                            vx_ratio=self.cfg.crop_params.src_vx_ratio,
+                            vy_ratio=self.cfg.crop_params.src_vy_ratio,
+                        )
+                        if self.is_animal:
+                            ret_dct["lmk_crop"] = lmk
+                        else:
+                            lmk = self.model_dict["landmark"].predict(img_rgb, lmk)
+                            ret_dct["lmk_crop"] = lmk
+                            ret_dct["lmk_crop_256x256"] = ret_dct["lmk_crop"] * 256 / self.cfg.crop_params.src_dsize
 
-                    # update a 256x256 version for network input
+                    # Create a 256x256 version for network input
                     ret_dct["img_crop_256x256"] = cv2.resize(
                         ret_dct["img_crop"], (256, 256), interpolation=cv2.INTER_AREA
                     )
