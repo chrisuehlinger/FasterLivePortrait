@@ -1,0 +1,111 @@
+# FLPSF Editor Configuration
+
+# Application Settings
+application:
+  name: "FLPSF Editor"
+  version: "1.0.0"
+  theme: "system"  # system, light, dark
+  language: "en"
+  recent_files_count: 10
+  auto_save: true
+  auto_save_interval: 300  # seconds
+
+# Paths
+paths:
+  checkpoints_dir: "../checkpoints"
+  templates_dir: "resources/templates"
+  default_save_dir: "."
+
+# Editor Settings
+editor:
+  # Image Display
+  image:
+    max_size: 1024  # Maximum display size for images
+    quality: 95     # JPEG quality for embedded images
+    grid_size: 20   # Grid size for overlay
+    
+  # Landmark Settings
+  landmarks:
+    point_size: 3
+    line_width: 1
+    colors:
+      normal: [0, 255, 0]      # Green
+      selected: [255, 0, 0]    # Red
+      hover: [255, 255, 0]     # Yellow
+      connection: [0, 255, 255]  # Cyan
+    templates:
+      human: "templates/human_landmarks.npz"
+      animal: "templates/animal_landmarks.npz"
+      cartoon: "templates/cartoon_landmarks.npz"
+    
+  # Parameter Editing
+  parameters:
+    precision: 4  # Decimal places to show
+    slider_steps: 100
+    
+  # 3D Preview
+  preview_3d:
+    background_color: [40, 40, 40]
+    wireframe_color: [200, 200, 200]
+    point_size: 2
+
+# Model Settings
+models:
+  face_detection:
+    type: "insightface"
+    checkpoint: "checkpoints/liveportrait_onnx/detection.onnx"
+  
+  landmark_detection:
+    type: "insightface"
+    checkpoint: "checkpoints/liveportrait_onnx/landmarks.onnx"
+    
+  motion_extraction:
+    type: "liveportrait"
+    checkpoint: "checkpoints/liveportrait_onnx/motion_extractor.onnx"
+    
+  appearance_extraction:
+    type: "liveportrait" 
+    checkpoint: "checkpoints/liveportrait_onnx/app_feat_extractor.onnx"
+    
+  animal_detection:
+    type: "xpose"
+    checkpoint: "checkpoints/liveportrait_animal_onnx/xpose.pth"
+
+# UI Settings
+ui:
+  font_family: "Arial"
+  font_size: 10
+  main_window:
+    width: 1280
+    height: 800
+    position: [100, 100]  # [x, y]
+    
+  color_scheme:
+    primary: "#4a90e2"
+    secondary: "#f39c12"
+    success: "#2ecc71"
+    warning: "#e67e22"
+    error: "#e74c3c"
+    background: "#f5f5f5"
+    text: "#333333"
+    
+  panels:
+    image:
+      position: "left"
+      size: 0.7  # Proportion of window width
+    parameters:
+      position: "right"
+      size: 0.3  # Proportion of window width
+    preview:
+      position: "bottom"
+      size: 0.3  # Proportion of window height
+      
+  shortcuts:
+    save: "Ctrl+S"
+    open: "Ctrl+O"
+    new: "Ctrl+N"
+    undo: "Ctrl+Z"
+    redo: "Ctrl+Shift+Z"
+    zoom_in: "Ctrl++"
+    zoom_out: "Ctrl+-"
+    fit_to_view: "Ctrl+0"

@@ -267,6 +267,90 @@ class FasterLivePortraitPipeline:
             traceback.print_exc()
             return False
 
+    def prepare_source_from_flpsf(self, flpsf_path, **kwargs):
+        """
+        Process a source image using data from a FasterLivePortrait Source Format file.
+        This bypasses face detection and landmark extraction, using pre-computed data instead.
+        
+        Args:
+            flpsf_path (str): Path to the FLPSF file
+            **kwargs: Additional keyword arguments
+            
+        Returns:
+            bool: True if processing succeeded, False otherwise
+        """
+        from ..utils.flpsf import load_flpsf, extract_src_infos
+
+        print(f"Loading source from FLPSF file: {flpsf_path}")
+        try:
+            # Load FLPSF data
+            source_data = load_flpsf(flpsf_path)
+            if source_data is None:
+                print(f"Error: Could not load FLPSF file from {flpsf_path}")
+                return False
+                
+            # Check if this is an animal face
+            is_animal = source_data.get('is_animal', False)
+            if is_animal != self.is_animal:
+                print(f"Warning: FLPSF animal mode ({is_animal}) doesn't match pipeline mode ({self.is_animal})")
+                # Continue anyway, but warn the user
+            
+            # Set source image details from FLPSF
+            self.is_source_video = False
+            self.source_path = source_data.get('image_path', '')
+            
+            # Use the embedded image if available, otherwise load from disk
+            if 'decoded_image' in source_data and source_data['decoded_image'] is not None:
+                print("Using embedded image from FLPSF file")
+                self.src_imgs = [source_data['decoded_image']]
+            elif os.path.exists(self.source_path):
+                print(f"Loading image from {self.source_path}")
+                img_bgr = cv2.imread(self.source_path, cv2.IMREAD_COLOR)
+                if img_bgr is None:
+                    print(f"Error: Could not load image from {self.source_path}")
+                    return False
+                img_bgr = resize_to_limit(img_bgr, self.cfg.infer_params.source_max_dim,
+                                          self.cfg.infer_params.source_division)
+                img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+                self.src_imgs = [img_rgb]
+            else:
+                print(f"Error: No image found in FLPSF or at path {self.source_path}")
+                return False
+            
+            # Extract the src_infos structure
+            self.src_infos = extract_src_infos(source_data)
+            if self.src_infos is None or len(self.src_infos) == 0 or len(self.src_infos[0]) == 0:
+                print("Error: Failed to extract valid src_infos from FLPSF data")
+                return False
+                
+            # Validate the structure contains required elements
+            src_info = self.src_infos[0][0]  # First face's info
+            required_keys = ['pitch', 'yaw', 'roll', 't', 'exp', 'scale', 'kp']
+            for key in required_keys:
+                if key not in src_info[0] or src_info[0][key] is None:
+                    print(f"Error: Missing required parameter '{key}' in FLPSF data")
+                    return False
+            
+            # Convert any PyTorch tensors to appropriate devices
+            for i in range(len(self.src_infos)):
+                for j in range(len(self.src_infos[i])):
+                    face_info = self.src_infos[i][j]
+                    # Check the mask and transformation matrix (typically indices 8 and 9)
+                    for idx in [8, 9]:
+                        if idx < len(face_info) and face_info[idx] is not None:
+                            if hasattr(face_info[idx], 'to') and not isinstance(face_info[idx], np.ndarray):
+                                # It's a PyTorch tensor, make sure it's on the right device
+                                face_info[idx] = face_info[idx].to(self.device)
+            
+            print("Successfully loaded source from FLPSF file")
+            return True
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"Error processing FLPSF file: {e}")
+            return False
+
     def retarget_eye(self, kp_source, eye_close_ratio):
         """
         kp_source: BxNx3

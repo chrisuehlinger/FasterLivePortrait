@@ -461,8 +461,94 @@ if __name__ == '__main__':
     parser.add_argument('--realtime', action='store_true', help='realtime inference')
     parser.add_argument('--animal', action='store_true', help='use animal model')
     parser.add_argument('--paste_back', action='store_true', default=False, help='paste back to origin image')
+    parser.add_argument('--custom_landmarks', type=str, default=None, help='path to custom landmark data (.npz) exported from landmark editor')
+    parser.add_argument('--flpsf', type=str, default=None, help='path to FasterLivePortrait Source Format (.flpsf) file')
+    parser.add_argument('--save_flpsf', type=str, default=None, help='save source processing to FLPSF file')
     args, unknown = parser.parse_known_args()
-
+    
+    # Load configuration
+    infer_cfg = OmegaConf.load(args.cfg)
+    infer_cfg.infer_params.flag_pasteback = args.paste_back
+    
+    pipe = FasterLivePortraitPipeline(cfg=infer_cfg, is_animal=args.animal)
+    
+    # Check if we're using a FLPSF file for source data
+    if args.flpsf and os.path.exists(args.flpsf):
+        try:
+            logger.info(f"Loading source from FLPSF file: {args.flpsf}")
+            ret = pipe.prepare_source_from_flpsf(args.flpsf, realtime=args.realtime)
+            if not ret:
+                logger.error("Failed to load source from FLPSF file")
+                exit(1)
+        except Exception as e:
+            logger.error(f"Error loading FLPSF file: {e}")
+            traceback.print_exc()
+            exit(1)
+    # Check if custom landmarks are provided
+    elif args.custom_landmarks and os.path.exists(args.custom_landmarks):
+        try:
+            logger.info(f"Loading custom landmark data from: {args.custom_landmarks}")
+            custom_data = np.load(args.custom_landmarks, allow_pickle=True)
+            
+            # Prepare source with custom data
+            if 'image_path' in custom_data:
+                source_image_path = str(custom_data['image_path'])
+                # If stored image path doesn't exist, use the provided src_image
+                if not os.path.exists(source_image_path):
+                    logger.warning(f"Image path in landmarks file ({source_image_path}) not found. Using provided source image.")
+                    source_image_path = args.src_image
+            else:
+                source_image_path = args.src_image
+                
+            # Prepare landmark data structure
+            landmarks_data = {'landmarks': custom_data['landmarks']}
+            
+            # Check if advanced parameters are included
+            has_face_params = bool(custom_data.get('has_face_params', False))
+            
+            if has_face_params:
+                logger.info("Using advanced face parameters from landmark data")
+                landmarks_data['face_params'] = {}
+                
+                # Extract all face parameters
+                for param in ['pitch', 'yaw', 'roll', 't', 'exp', 'scale', 'kp', 'R_s', 'f_s', 'x_s', 'M']:
+                    if param in custom_data:
+                        landmarks_data['face_params'][param] = custom_data[param]
+            else:
+                logger.info("Using basic landmark data only - model will compute face parameters")
+                landmarks_data['face_params'] = None
+                
+            # Process the source with custom landmarks
+            ret = pipe.prepare_source_from_custom_data(source_image_path, landmarks_data, realtime=args.realtime)
+            if not ret:
+                logger.error("Failed to process custom landmark data")
+                exit(1)
+        except Exception as e:
+            logger.error(f"Error loading custom landmark data: {e}")
+            traceback.print_exc()
+            exit(1)
+    else:
+        # Standard processing with face detection
+        ret = pipe.prepare_source(args.src_image, realtime=args.realtime)
+        if not ret:
+            print(f"no face in {args.src_image}! exit!")
+            exit(1)
+            
+    # Save to FLPSF if requested
+    if args.save_flpsf:
+        from src.utils.flpsf import create_flpsf_from_pipeline
+        
+        flpsf_path = args.save_flpsf
+        if not flpsf_path.endswith('.flpsf'):
+            flpsf_path += '.flpsf'
+            
+        logger.info(f"Saving source data to FLPSF file: {flpsf_path}")
+        if create_flpsf_from_pipeline(pipe, flpsf_path, embed_image=True):
+            logger.info(f"Successfully saved source data to {flpsf_path}")
+        else:
+            logger.error(f"Failed to save source data to {flpsf_path}")
+    
+    # Continue with normal processing of driving video
     if args.dri_video.endswith(".pkl"):
         run_with_pkl(args)
     else:
