@@ -127,6 +127,18 @@ class FasterLivePortraitPipeline:
     def prepare_source(self, source_path, **kwargs):
         print(f"process source:{source_path} >>>>>>>>")
         try:
+            # Check if the source is an SPD file
+            from src.utils.spd_utils import is_spd_file, load_spd_file
+            
+            if is_spd_file(source_path):
+                # Load SPD file directly, skipping face detection and analysis
+                print(f"Loading SPD file: {source_path}")
+                self.src_imgs, self.src_infos, self.is_source_video = load_spd_file(source_path, self.device, self.cfg)
+                self.source_path = source_path
+                print(f"Successfully loaded SPD file: {source_path}")
+                return len(self.src_infos) > 0
+
+            # Regular image or video processing path
             if utils.is_video(source_path):
                 self.is_source_video = True
             else:
@@ -261,6 +273,15 @@ class FasterLivePortraitPipeline:
                     M = torch.from_numpy(crop_info['M_c2o']).to(self.device)
                     src_infos[i].append(M)
                 self.src_infos.append(src_infos[:])
+                
+            # Export to SPD if requested
+            if kwargs.get("export_spd", None):
+                from src.utils.spd_utils import save_spd_file
+                spd_path = kwargs.get("export_spd")
+                print(f"Exporting to SPD file: {spd_path}")
+                spd_path = save_spd_file(spd_path, self.src_imgs, self.src_infos, self.is_source_video)
+                print(f"Successfully exported to SPD file: {spd_path}")
+                
             print(f"finish process source:{source_path} >>>>>>>>")
             return len(self.src_infos) > 0
         except Exception as e:
