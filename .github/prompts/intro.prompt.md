@@ -1,0 +1,1 @@
+Analyze this codebase and describe in detail what is going on. In particular describe how a source image (not source video) is processed before the first frame of driving video is received.
