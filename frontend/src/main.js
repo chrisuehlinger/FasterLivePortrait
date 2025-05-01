@@ -31,12 +31,19 @@ let composer;
 let rendererWidth = window.innerWidth;
 let rendererHeight = window.innerHeight;
 
+const textureLoader = new THREE.TextureLoader();
+
 // Background images corresponding to each source
-const backgroundImages = [
+const backgroundTextures = [
     '/frontend/images/ahau-kin-bg.png',  // Placeholder paths - update these later
     '/frontend/images/ix-chel-bg.png',
     '/frontend/images/chac-bolay-bg.png'
-];
+].map(path => {
+    return textureLoader.load(path, (texture) => {
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+    });
+});
 const keyColors = [
     new THREE.Color('yellow'),  // Placeholder paths - update these later
     new THREE.Color('blue'),
@@ -44,36 +51,6 @@ const keyColors = [
 ];
 let currentBackgroundIndex = 0;
 
-// Luma key shader for transparency
-const lumaKeyShader = {
-    uniforms: {
-        'tDiffuse': { value: null },
-        'threshold': { value: 0.05 }  // 5% luminosity threshold
-    },
-    vertexShader: `
-        varying vec2 vUv;
-        void main() {
-            vUv = uv;
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-    `,
-    fragmentShader: `
-        uniform sampler2D tDiffuse;
-        uniform float threshold;
-        varying vec2 vUv;
-        
-        void main() {
-            vec4 color = texture2D(tDiffuse, vUv);
-            float luminance = 0.299 * color.r + 0.587 * color.g + 0.114 * color.b;
-            
-            if (luminance < threshold) {
-                gl_FragColor = vec4(color.rgb, 0.0); // Transparent
-            } else {
-                gl_FragColor = color;
-            }
-        }
-    `
-};
 
 // Initialize Three.js scene
 function initThreeJS() {
@@ -89,9 +66,7 @@ function initThreeJS() {
     document.body.appendChild(renderer.domElement);
     
     // Create background layer first (rendered behind)
-    backgroundTexture = new THREE.TextureLoader().load(backgroundImages[0], updateTextureAspectRatio);
-    backgroundTexture.minFilter = THREE.LinearFilter;
-    backgroundTexture.magFilter = THREE.LinearFilter;
+    backgroundTexture = backgroundTextures[0];
     
     // Create inverted background material using shader material
     backgroundMaterial = new THREE.ShaderMaterial({
@@ -120,12 +95,13 @@ function initThreeJS() {
                 float luminance = 0.299 * inverted.r + 0.587 * inverted.g + 0.114 * inverted.b;
                 luminance = luminance * texColor.a;
                 if (luminance < threshold) {
-                    gl_FragColor = vec4(inverted.rgb, 0.0); // Transparent
+                    gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0); // Transparent
                 } else {
-                    gl_FragColor = vec4(keyColor*luminance, texColor.a);
+                    gl_FragColor = vec4(keyColor, texColor.a);
                 }
             }
         `,
+        transparent: true,
         side: THREE.FrontSide
     });
     
@@ -143,7 +119,7 @@ function initThreeJS() {
     videoMaterial = new THREE.ShaderMaterial({
         uniforms: {
             'videoTexture': { value: videoTexture },
-            'threshold': { value: 0.25 },
+            'threshold': { value: 0.05 },
             'keyColor': { value: keyColors[currentBackgroundIndex] }
         },
         vertexShader: `
@@ -163,16 +139,21 @@ function initThreeJS() {
                 // Flip the Y coordinate to fix upside-down video
                 vec2 flippedUv = vec2(vUv.x, 1.0 - vUv.y);
                 vec4 color = texture2D(videoTexture, flippedUv);
+
+                if(color.g > 0.75 && color.b < 0.25 && color.r < 0.25) {
+                    gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0); // Black
+                    return;
+                }
                 // Invert the colors
                 vec3 inverted = 1.0 - color.rgb;
 
                 float luminance = 0.299 * inverted.r + 0.587 * inverted.g + 0.114 * inverted.b;
                 
-                if (luminance < threshold) {
-                    gl_FragColor = vec4(inverted.rgb, 0.0); // Transparent
-                } else {
-                    gl_FragColor = vec4(keyColor*luminance, color.a);
-                }
+                // if (luminance < threshold) {
+                //     gl_FragColor = vec4(inverted.rgb, 0.0); // Transparent
+                // } else {
+                    gl_FragColor = vec4(keyColor*luminance, luminance*color.a);
+                // }
             }
         `,
         transparent: true,
@@ -213,24 +194,14 @@ function setupPostProcessing() {
 
 // Switch to a different background image
 function switchBackground(index) {
-    if (index >= 0 && index < backgroundImages.length) {
+    if (index < backgroundTextures.length) {
         currentBackgroundIndex = index;
-        new THREE.TextureLoader().load(backgroundImages[index], (texture) => {
-            texture.minFilter = THREE.LinearFilter;
-            texture.magFilter = THREE.LinearFilter;
-            
-            // Dispose of old texture to free memory
-            if (backgroundMaterial.uniforms.backgroundTexture.value) {
-                backgroundMaterial.uniforms.backgroundTexture.value.dispose();
-            }
-            
-            // Set new texture
-            backgroundMaterial.uniforms.backgroundTexture.value = texture;
-            backgroundMaterial.needsUpdate = true;
-            
-            // Update aspect ratios
-            updateTextureAspectRatio();
-        });
+        backgroundMaterial.uniforms.backgroundTexture.value = backgroundTextures[index];
+        backgroundMaterial.uniforms.keyColor.value = keyColors[index];
+        backgroundMaterial.needsUpdate = true;
+        videoMaterial.uniforms.keyColor.value = keyColors[index];
+        videoMaterial.needsUpdate = true;
+        updateTextureAspectRatio();
     }
 }
 
@@ -250,34 +221,49 @@ function onWindowResize() {
 function updateTextureAspectRatio() {
     const screenAspect = rendererWidth / rendererHeight;
     
-    // Update video mesh aspect ratio if we have frame dimensions
-    if (videoTexture.image) {
-        const videoAspect = videoTexture.image.width / videoTexture.image.height;
-        
-        // Scale the plane to maintain aspect ratio
-        if (videoAspect > screenAspect) {
-            // Video is wider than screen
-            videoMesh.scale.set(1, screenAspect / videoAspect, 1);
-        } else {
-            // Video is taller than screen
-            videoMesh.scale.set(videoAspect / screenAspect, 1, 1);
-        }
-    }
+    // First update background mesh aspect ratio if we have background texture
+    let bgScaleX = 1;
+    let bgScaleY = 1;
     
-    // Update background mesh aspect ratio if we have background texture
     if (backgroundMaterial.uniforms.backgroundTexture.value && 
         backgroundMaterial.uniforms.backgroundTexture.value.image) {
         const bgTexture = backgroundMaterial.uniforms.backgroundTexture.value;
         const bgAspect = bgTexture.image.width / bgTexture.image.height;
         
-        // Scale the background to cover the screen, like CSS background-size: cover
+        // Scale the background to contain within the screen, like CSS background-size: contain
         if (bgAspect > screenAspect) {
             // Background is wider than screen
-            backgroundMesh.scale.set(bgAspect / screenAspect, 1, 1);
+            bgScaleX = 1;
+            bgScaleY = screenAspect / bgAspect;
         } else {
             // Background is taller than screen
-            backgroundMesh.scale.set(1, screenAspect / bgAspect, 1);
+            bgScaleX = bgAspect / screenAspect;
+            bgScaleY = 1;
         }
+        
+        backgroundMesh.scale.set(bgScaleX, bgScaleY, 1);
+    }
+    
+    // Now update video mesh aspect ratio if we have frame dimensions
+    if (videoTexture.image) {
+        // Force a 1:1 aspect ratio for the video regardless of source dimensions
+        
+        // Calculate the target size for the video (square)
+        const targetHeight = 0.85; // Video takes up 60% of the normalized height
+        
+        // To maintain a true 1:1 aspect ratio (square) regardless of window dimensions:
+        // 1. Start with the desired height in normalized coordinates
+        const videoScaleY = targetHeight * bgScaleY;
+        
+        // 2. For a perfect square, we need to account for the screen aspect ratio
+        const videoScaleX = videoScaleY * (rendererHeight / rendererWidth);
+        
+        // Scale the video maintaining 1:1 aspect ratio
+        videoMesh.scale.set(videoScaleX, videoScaleY, 1);
+        
+        // Position the video at the top center of the composition
+        videoMesh.position.y = (bgScaleY - videoScaleY);
+        videoMesh.position.x = 0; // Center horizontally
     }
 }
 

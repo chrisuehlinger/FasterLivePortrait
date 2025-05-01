@@ -415,9 +415,18 @@ class FasterLivePortraitProcessor(BaseVideoProcessor):
             # First pass: determine the largest dimensions
             for idx, path in enumerate(self.src_image_paths):
                 logger.info(f"Loading source image {idx + 1}: {path}")
-                img = cv2.imread(path)
+                img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
                 if img is None:
                     raise ValueError(f"Could not load source image {idx + 1}: {path}")
+                
+                # Handle transparency in source images
+                if img.shape[-1] == 4:  # Image has alpha channel
+                    logger.info(f"Source image {idx + 1} has transparency. Replacing transparent pixels with green.")
+                    green_background = np.ones((img.shape[0], img.shape[1], 3), dtype=np.uint8) * np.array([0, 255, 0], dtype=np.uint8)
+                    alpha = img[:, :, 3] / 255.0
+                    rgb = img[:, :, :3]
+                    img = (rgb * alpha[:, :, np.newaxis] + green_background * (1 - alpha[:, :, np.newaxis])).astype(np.uint8)
+                
                 original_images.append(img)
                 h, w = img.shape[:2]
                 max_width = max(max_width, w)
@@ -703,6 +712,25 @@ class Server:
             logger.info(f"Is animal model: {config.is_animal}")
             
             try:
+                # Handle transparency in source images
+                for i, path in enumerate(source_images):
+                    # Check if the image has an alpha channel (transparency)
+                    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+                    if img is not None and img.shape[-1] == 4:
+                        # Image has alpha channel
+                        logger.info(f"Source image {i+1} has transparency. Replacing transparent pixels with green.")
+                        # Create a green background (BGR format)
+                        green_background = np.ones((img.shape[0], img.shape[1], 3), dtype=np.uint8) * np.array([0, 255, 0], dtype=np.uint8)
+                        # Extract alpha channel
+                        alpha = img[:, :, 3] / 255.0
+                        # Convert to 3 channels (drop alpha)
+                        rgb = img[:, :, :3]
+                        # Alpha blend with green background
+                        result = (rgb * alpha[:, :, np.newaxis] + green_background * (1 - alpha[:, :, np.newaxis])).astype(np.uint8)
+                        # Save back to the file
+                        cv2.imwrite(path, result)
+                        logger.info(f"Updated source image {i+1} with transparent pixels replaced by green")
+                
                 self.processor = FasterLivePortraitProcessor(
                     config_path=config.config_path,
                     src_image_path=config.source_image,
