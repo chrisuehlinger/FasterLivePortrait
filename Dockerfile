@@ -20,7 +20,7 @@ COPY ./scripts /root/FasterLivePortrait/scripts
 COPY ./src /root/FasterLivePortrait/src
 COPY ./assets /root/FasterLivePortrait/assets
 COPY ./entrypoint.sh /root/FasterLivePortrait/entrypoint.sh
-COPY ./webrtc_server.py /root/FasterLivePortrait/webrtc_server.py
+COPY ./websocket_server.py /root/FasterLivePortrait/websocket_server.py
 COPY ./run.py /root/FasterLivePortrait/run.py
 
 ENTRYPOINT [ "./entrypoint.sh" ]
