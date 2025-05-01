@@ -290,6 +290,30 @@ class ConnectionManager:
             except Exception as e:
                 logger.error(f"Error sending preview to actor in session {session_id}: {e}")
 
+    # New method to send notifications to viewers when source is switched
+    async def notify_viewers_source_switched(self, session_id: str, source_index: int, source_name: str):
+        """Notify all viewers that the source image has been switched"""
+        if session_id not in self.viewer_connections:
+            return
+            
+        message = {
+            "status": "source_switched", 
+            "current_source": source_index,
+            "source_name": source_name
+        }
+        
+        disconnected_viewers = []
+        for viewer_websocket in self.viewer_connections[session_id]:
+            try:
+                await viewer_websocket.send_json(message)
+            except Exception as e:
+                logger.error(f"Error sending source switch notification to viewer in session {session_id}: {e}")
+                disconnected_viewers.append(viewer_websocket)
+                
+        # Remove any disconnected viewers
+        for websocket in disconnected_viewers:
+            self.viewer_connections[session_id].remove(websocket)
+
     def _update_metric(self, metric_name, value):
         """Update a performance metric, maintaining a rolling average"""
         if len(self.performance_metrics[metric_name]) >= 30:  # Keep last 30 values
@@ -791,6 +815,11 @@ class Server:
                                         "source_name": os.path.basename(self.processor.src_image_paths[new_index])
                                     })
                                     
+                                    # Notify viewers about the source switch
+                                    await self.connection_manager.notify_viewers_source_switched(
+                                        session_id, new_index, os.path.basename(self.processor.src_image_paths[new_index])
+                                    )
+                                    
                             # Handle key press events for source switching
                             elif command.get("action") == "key_press" and hasattr(self, 'has_multiple_sources') and self.has_multiple_sources:
                                 key = command.get("key")
@@ -810,6 +839,11 @@ class Server:
                                                 "current_source": new_index,
                                                 "source_name": os.path.basename(self.processor.src_image_paths[new_index])
                                             })
+                                            
+                                            # Notify viewers about the source switch
+                                            await self.connection_manager.notify_viewers_source_switched(
+                                                session_id, new_index, os.path.basename(self.processor.src_image_paths[new_index])
+                                            )
                                             
                         except json.JSONDecodeError:
                             logger.error(f"Received invalid JSON command: {message['text']}")

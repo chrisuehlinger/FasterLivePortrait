@@ -144,7 +144,19 @@ function connectToWebSocket() {
 async function handleWebSocketMessage(event) {
     if (typeof event.data === 'string') {
         // Handle text messages (like status updates)
-        console.log('Received text message:', event.data);
+        try {
+            const jsonData = JSON.parse(event.data);
+            console.log('Received JSON message:', jsonData);
+            
+            // Handle source image switching
+            if (jsonData.status === 'source_switched') {
+                console.log(`Source image switched to index ${jsonData.current_source}: ${jsonData.source_name}`);
+                showStatus(`Source changed to: ${jsonData.source_name}`, false);
+            }
+        } catch (e) {
+            // If it's not valid JSON, just log it
+            console.log('Received text message:', event.data);
+        }
         return;
     }
     
