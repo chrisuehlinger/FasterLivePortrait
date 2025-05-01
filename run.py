@@ -34,6 +34,7 @@ import platform
 import pickle
 import collections
 import logging
+import threading
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from colorama import Fore, Back, Style
@@ -111,16 +112,136 @@ class PerformanceTracker:
 # Initialize performance tracker
 performance_tracker = PerformanceTracker()
 
+# Class to manage multiple source images with automatic cycling
+class MultiSourceManager:
+    def __init__(self, source_images, pipeline, switch_interval=5.0, is_animal=False):
+        """
+        Initialize the multi-source manager
+        
+        Args:
+            source_images (list): List of paths to source images
+            pipeline (FasterLivePortraitPipeline): Reference to the animation pipeline
+            switch_interval (float): Time interval in seconds between source switches
+            is_animal (bool): Whether to use animal model
+        """
+        self.source_images = source_images
+        self.pipeline = pipeline
+        self.switch_interval = switch_interval
+        self.is_animal = is_animal
+        self.current_index = 0
+        self.source_count = len(source_images)
+        self.last_switch_time = time.time()
+        self.active = False
+        self.lock = threading.RLock()  # Thread-safe lock for pipeline access
+        
+        # Pre-load all sources
+        self.source_data = []
+        for src_path in source_images:
+            logger.info(f"Loading source image: {src_path}")
+            try:
+                # Clone the pipeline for each source to avoid conflicts
+                self.pipeline.prepare_source(src_path, realtime=True)
+                self.source_data.append({
+                    "path": src_path,
+                    "image": self.pipeline.src_imgs[0],
+                    "info": self.pipeline.src_infos[0]
+                })
+                logger.info(f"Successfully loaded source: {src_path}")
+            except Exception as e:
+                logger.error(f"Error loading source {src_path}: {e}")
+        
+        # Make sure we have at least one valid source
+        if not self.source_data:
+            raise ValueError("No valid source images could be loaded")
+    
+    def start_auto_switching(self):
+        """Start the automatic source switching"""
+        self.active = True
+        self.last_switch_time = time.time()
+        
+        # Start the auto-switch thread
+        self.switch_thread = threading.Thread(target=self._auto_switch_thread, daemon=True)
+        self.switch_thread.start()
+    
+    def stop_auto_switching(self):
+        """Stop the automatic source switching"""
+        self.active = False
+        if hasattr(self, 'switch_thread'):
+            self.switch_thread.join(timeout=1.0)
+    
+    def _auto_switch_thread(self):
+        """Background thread to automatically switch sources"""
+        while self.active:
+            current_time = time.time()
+            if current_time - self.last_switch_time >= self.switch_interval:
+                self.switch_to_next()
+                self.last_switch_time = current_time
+            time.sleep(0.1)  # Sleep to avoid high CPU usage
+    
+    def switch_to_next(self):
+        """Switch to the next source in the list"""
+        with self.lock:
+            self.current_index = (self.current_index + 1) % self.source_count
+            logger.info(f"Switching to source {self.current_index + 1}/{self.source_count}: {self.source_data[self.current_index]['path']}")
+    
+    def get_current_source(self):
+        """Get the currently active source data"""
+        with self.lock:
+            return self.source_data[self.current_index]
+    
+    def reset_pipeline_state(self):
+        """Reset the pipeline state for a clean transition"""
+        with self.lock:
+            self.pipeline.frame_id = 0
+            self.pipeline.R_d_0 = None
+            self.pipeline.x_d_0_info = None
+            self.pipeline.src_lmk_pre = None
+
 def run_with_video(args):
     print(Fore.RED+'Render,  Q > exit,  S > Stitching,  Z > RelativeMotion,  X > AnimationRegion,  C > CropDrivingVideo, KL > AdjustSourceScale, NM > AdjustDriverScale,  Space > Webcamassource,  R > SwitchRealtimeWebcamUpdate'+Style.RESET_ALL)
     infer_cfg = OmegaConf.load(args.cfg)
     infer_cfg.infer_params.flag_pasteback = args.paste_back
 
+    # Initialize pipeline
     pipe = FasterLivePortraitPipeline(cfg=infer_cfg, is_animal=args.animal)
-    ret = pipe.prepare_source(args.src_image, realtime=args.realtime)
-    if not ret:
-        print(f"no face in {args.src_image}! exit!")
-        exit(1)
+    
+    # Setup multiple sources if provided
+    source_images = [args.src_image]  # Start with the primary source image
+    if args.src_image_2:
+        source_images.append(args.src_image_2)
+    if args.src_image_3:
+        source_images.append(args.src_image_3)
+    
+    # Check if multi-source mode is enabled
+    multi_source_mode = len(source_images) > 1 and args.auto_switch
+    
+    if multi_source_mode:
+        # Initialize the multi-source manager with all source images
+        source_manager = MultiSourceManager(
+            source_images=source_images, 
+            pipeline=pipe, 
+            switch_interval=args.switch_interval,
+            is_animal=args.animal
+        )
+        
+        # Start automatic switching if requested
+        if args.auto_switch:
+            source_manager.start_auto_switching()
+            
+        # Use the first source to start
+        current_source = source_manager.get_current_source()
+        src_img = current_source["image"]
+        src_info = current_source["info"]
+        last_source_index = source_manager.current_index
+    else:
+        # Standard single-source mode
+        ret = pipe.prepare_source(args.src_image, realtime=args.realtime)
+        if not ret:
+            print(f"No face in {args.src_image}! exit!")
+            exit(1)
+        src_img = pipe.src_imgs[0]
+        src_info = pipe.src_infos[0]
+    
     if not args.dri_video or not os.path.exists(args.dri_video):
         # read frame from camera if no driving video input
         vcap = cv2.VideoCapture(0)
@@ -130,7 +251,7 @@ def run_with_video(args):
     else:
         vcap = cv2.VideoCapture(args.dri_video)
     fps = int(vcap.get(cv2.CAP_PROP_FPS))
-    h, w = pipe.src_imgs[0].shape[:2]
+    h, w = src_img.shape[:2]
     save_dir = f"./results/{datetime.datetime.now().strftime('%Y-%m-%d-%H%M%S')}"
     os.makedirs(save_dir, exist_ok=True)
 
@@ -169,10 +290,23 @@ def run_with_video(args):
             frame_size = frame.nbytes
             performance_tracker.update_metric("frame_sizes", frame_size)
         
+        # Check if we need to switch sources in multi-source mode
+        if multi_source_mode:
+            current_source = source_manager.get_current_source()
+            if source_manager.current_index != last_source_index:
+                # Reset pipeline state when switching sources
+                source_manager.reset_pipeline_state()
+                # Force treating this as a first frame
+                frame_ind = 0
+                last_source_index = source_manager.current_index
+            
+            src_img = current_source["image"]
+            src_info = current_source["info"]
+        
         # Timing for model processing
         process_start_time = time.time()
         first_frame = frame_ind == 0
-        dri_crop, out_crop, out_org, dri_motion_info = pipe.run(frame, pipe.src_imgs[0], pipe.src_infos[0],
+        dri_crop, out_crop, out_org, dri_motion_info = pipe.run(frame, src_img, src_info,
                                                                 first_frame=first_frame)
         process_time = time.time() - process_start_time
         performance_tracker.update_metric("process_time", process_time * 1000)  # Convert to ms
@@ -206,13 +340,42 @@ def run_with_video(args):
         else:
             if infer_cfg.infer_params.flag_pasteback:
                 out_org = cv2.cvtColor(out_org, cv2.COLOR_RGB2BGR)
+                
+                # Add current source info in multi-source mode
+                if multi_source_mode:
+                    source_info_text = f"Source: {source_manager.current_index + 1}/{source_manager.source_count}"
+                    cv2.putText(out_org, source_info_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+                    
+                    # Show source file name
+                    source_name = os.path.basename(source_manager.get_current_source()["path"])
+                    cv2.putText(out_org, source_name, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                
                 cv2.imshow('Render', out_org)
             else:
+                # Show source info in multi-source mode
+                if multi_source_mode:
+                    source_info_text = f"Source: {source_manager.current_index + 1}/{source_manager.source_count}"
+                    cv2.putText(out_crop, source_info_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+                    
+                    # Show source file name
+                    source_name = os.path.basename(source_manager.get_current_source()["path"])
+                    cv2.putText(out_crop, source_name, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                
                 # image show in realtime mode
                 cv2.imshow('Render', out_crop)
+            
             # Check for key press
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
                 break
+            # Manual source switching with number keys in multi-source mode
+            elif multi_source_mode and key >= ord('1') and key <= ord('3'):
+                source_idx = key - ord('1')
+                if source_idx < source_manager.source_count:
+                    source_manager.current_index = source_idx
+                    source_manager.last_switch_time = time.time()  # Reset timer
+                    logger.info(f"Manually switched to source {source_idx + 1}")
+        
         display_time = time.time() - display_start_time
         performance_tracker.update_metric("display_time", display_time * 1000)  # Convert to ms
         
@@ -224,6 +387,11 @@ def run_with_video(args):
         performance_tracker.log_metrics()
         
     vcap.release()
+    
+    # Stop source switching thread if active
+    if multi_source_mode and args.auto_switch:
+        source_manager.stop_auto_switching()
+    
     if not args.realtime:
         vout_crop.release()
         vout_org.release()
@@ -347,12 +515,12 @@ def run_with_pkl(args):
         else:
             if infer_cfg.infer_params.flag_pasteback:
                 out_org = cv2.cvtColor(out_org, cv2.COLOR_RGB2BGR)
-                cv2.imshow('Render,  Q > exit,  S > Stitching,  Z > RelativeMotion,  X > AnimationRegion,  C > CropDrivingVideo, KL > AdjustSourceScale, NM > AdjustDriverScale,  Space > Webcamassource,  R > SwitchRealtimeWebcamUpdate',out_org)
+                cv2.imshow('Render', out_org)
             else:
                 # image show in realtime mode
-                cv2.imshow('Render,  Q > exit,  S > Stitching,  Z > RelativeMotion,  X > AnimationRegion,  C > CropDrivingVideo, KL > AdjustSourceScale, NM > AdjustDriverScale,  Space > Webcamassource,  R > SwitchRealtimeWebcamUpdate', out_crop)
+                cv2.imshow('Render', out_crop)
             
-            # Handle keyboard inputs
+            # Check for key press
             k = cv2.waitKey(1) & 0xFF
             if k == ord('q'):
                 break
@@ -454,7 +622,15 @@ def run_with_pkl(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Faster Live Portrait Pipeline')
     parser.add_argument('--src_image', required=False, type=str, default="assets/examples/source/s12.jpg",
-                        help='source image')
+                        help='primary source image')
+    parser.add_argument('--src_image_2', type=str, default="",
+                        help='second source image for auto-switching')
+    parser.add_argument('--src_image_3', type=str, default="",
+                        help='third source image for auto-switching')
+    parser.add_argument('--auto_switch', action='store_true',
+                        help='automatically switch between source images')
+    parser.add_argument('--switch_interval', type=float, default=5.0,
+                        help='time interval in seconds between source switches')
     parser.add_argument('--dri_video', required=False, type=str, default="assets/examples/driving/d14.mp4",
                         help='driving video')
     parser.add_argument('--cfg', required=False, type=str, default="configs/onnx_infer.yaml", help='inference config')

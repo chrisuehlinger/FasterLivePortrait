@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FasterLivePortrait</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+        }
+        canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        #connectionStatus {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            color: rgba(255, 255, 255, 0.7);
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            padding: 5px;
+            background-color: rgba(0, 0, 0, 0.5);
+            border-radius: 4px;
+            z-index: 100;
+            opacity: 1;
+            transition: opacity 1s;
+        }
+        #connectionStatus.fade {
+            opacity: 0;
+        }
+        #sessionInput {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 8px;
+            color: white;
+            z-index: 200;
+        }
+        #sessionInput input {
+            width: 100%;
+            padding: 8px;
+            margin: 10px 0;
+            border-radius: 4px;
+            border: none;
+        }
+        #sessionInput button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 10px;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="sessionInput">
+        <h2>Connect to Stream</h2>
+        <input type="text" id="sessionIdInput" placeholder="Enter session ID" value="performer1">
+        <button id="connectButton">Connect</button>
+    </div>
+    
+    <div id="connectionStatus">Waiting for connection...</div>
+    
+    <script type="module" src="./main.js"></script>
+</body>
+</html>

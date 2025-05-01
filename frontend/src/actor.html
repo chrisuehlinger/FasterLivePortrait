@@ -11,7 +11,7 @@
             padding: 20px;
             background-color: #f0f0f0;
             color: #333;
-            max-width: 1200px;
+            max-width: 1400px; /* Increased to accommodate side-by-side videos */
             margin: 0 auto;
         }
         h1 {
@@ -30,7 +30,15 @@
             padding: 20px;
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
             width: 100%;
-            max-width: 640px;
+            max-width: 500px; /* Reduced to fit side by side */
+        }
+        .preview-container {
+            background-color: #fff;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 500px; /* Reduced to fit side by side */
         }
         .control-panel {
             background-color: #fff;
@@ -38,7 +46,8 @@
             padding: 20px;
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
             width: 100%;
-            max-width: 640px;
+            max-width: 1060px; /* Wider to span both videos */
+            margin-top: 0; /* No top margin needed */
         }
         video {
             width: 100%;
@@ -106,16 +115,55 @@
             width: 100%;
             box-sizing: border-box;
         }
+        #outputPreview {
+            width: 100%;
+            border-radius: 4px;
+            background-color: #000;
+            display: block;
+            max-height: 360px;
+            object-fit: contain;
+        }
+        .preview-placeholder {
+            width: 100%;
+            height: 270px;
+            background-color: #2c3e50;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #ecf0f1;
+            font-size: 16px;
+            text-align: center;
+            padding: 10px;
+        }
+        .video-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
     </style>
 </head>
 <body>
     <h1>FasterLivePortrait - Actor Streaming</h1>
     
     <div class="container">
-        <div class="video-container">
-            <h2>Your Camera Feed</h2>
-            <video id="localVideo" autoplay muted playsinline></video>
-            <div class="status" id="connectionStatus">Not connected</div>
+        <div class="video-row">
+            <div class="video-container">
+                <h2>Your Camera Feed</h2>
+                <video id="localVideo" autoplay muted playsinline></video>
+                <div class="status" id="connectionStatus">Not connected</div>
+            </div>
+            
+            <div class="preview-container">
+                <h2>Output Preview</h2>
+                <div class="preview-placeholder" id="previewPlaceholder">
+                    Connect to the server to see a preview of what viewers will see
+                </div>
+                <img id="outputPreview" style="display: none;">
+                <div class="status" id="previewStatus"></div>
+            </div>
         </div>
         
         <div class="control-panel">
@@ -135,6 +183,14 @@
             <div id="viewerLink"></div>
             
             <div class="status" id="stats"></div>
+            
+            <!-- Add source switching controls -->
+            <div id="sourceControls" style="display: none; margin-top: 15px; padding: 15px; background-color: #e8f4f8; border-radius: 8px;">
+                <h3>Source Image Controls</h3>
+                <p>Press number keys to switch between source images:</p>
+                <div id="sourceButtons"></div>
+                <p><small>Current source: <span id="currentSourceInfo">1</span></small></p>
+            </div>
             
             <h3>Camera Settings</h3>
             <div>
@@ -176,6 +232,9 @@
         const loading = document.getElementById('loading');
         const stats = document.getElementById('stats');
         const sessionIdInput = document.getElementById('sessionIdInput');
+        const outputPreview = document.getElementById('outputPreview');
+        const previewPlaceholder = document.getElementById('previewPlaceholder');
+        const previewStatus = document.getElementById('previewStatus');
         
         // Global variables
         let localStream;
@@ -190,6 +249,8 @@
         let lastFrameTime = 0;
         let framesPerSecond = 0;
         let statsInterval;
+        let lastPreviewUpdateTime = 0;
+        let previewFramesReceived = 0;
         
         // Performance metrics
         let performanceMetrics = {
@@ -383,17 +444,41 @@
                 };
                 
                 websocket.onmessage = (event) => {
-                    // Handle any messages from server
-                    try {
-                        const message = JSON.parse(event.data);
-                        console.log('Server message:', message);
-                        
-                        if (message.status === 'connected') {
-                            // Connection confirmed
-                            connectionStatus.textContent = `Connected to server with session ID: ${message.session_id}`;
+                    // Handle text messages from server
+                    if (typeof event.data === 'string') {
+                        try {
+                            const message = JSON.parse(event.data);
+                            console.log('Server message:', message);
+                            
+                            if (message.status === 'connected') {
+                                // Connection confirmed
+                                connectionStatus.textContent = `Connected to server with session ID: ${message.session_id}`;
+                                
+                                // Check if server supports multiple sources
+                                if (message.has_multiple_sources) {
+                                    hasMultipleSources = true;
+                                    sourcesAvailable = message.sources || [];
+                                    currentSourceIndex = message.current_source || 0;
+                                    
+                                    console.log(`Server supports ${sourcesAvailable.length} source images:`, sourcesAvailable);
+                                    
+                                    // Setup source switching UI
+                                    setupSourceSwitching(sourcesAvailable);
+                                }
+                            }
+                            
+                            // Handle source switching confirmation
+                            if (message.status === 'source_switched') {
+                                console.log(`Server confirmed switch to source ${message.current_source + 1}: ${message.source_name}`);
+                                updateSourceUI(message.current_source);
+                            }
+                        } catch (e) {
+                            console.log('Received invalid JSON');
                         }
-                    } catch (e) {
-                        console.log('Received binary data or invalid JSON');
+                    }
+                    // Handle binary data (processed frames)
+                    else if (event.data instanceof Blob) {
+                        handlePreviewFrame(event.data);
                     }
                     
                     // Count bytes received for stats
@@ -414,6 +499,40 @@
                 disconnectButton.disabled = true;
                 connectButton.disabled = false;
                 sessionIdInput.disabled = false;
+            }
+        }
+        
+        // Handle preview frames received from server
+        function handlePreviewFrame(blob) {
+            // Create object URL from the blob
+            const imageUrl = URL.createObjectURL(blob);
+            
+            // Hide placeholder and show the image
+            if (previewPlaceholder.style.display !== 'none') {
+                previewPlaceholder.style.display = 'none';
+                outputPreview.style.display = 'block';
+            }
+            
+            // Update the preview image
+            outputPreview.onload = () => {
+                // Clean up previous object URL to prevent memory leaks
+                URL.revokeObjectURL(outputPreview.src);
+            };
+            outputPreview.src = imageUrl;
+            
+            // Update statistics
+            previewFramesReceived++;
+            const now = performance.now();
+            
+            // Update preview status every second
+            if (now - lastPreviewUpdateTime > 1000) {
+                const elapsedSec = (now - lastPreviewUpdateTime) / 1000;
+                const fps = Math.round(previewFramesReceived / elapsedSec);
+                
+                previewStatus.textContent = `Receiving preview: ${fps} fps`;
+                
+                lastPreviewUpdateTime = now;
+                previewFramesReceived = 0;
             }
         }
         
@@ -438,6 +557,11 @@
             connectionStatus.textContent = 'Disconnected from server.';
             connectionStatus.className = 'status';
             stats.textContent = '';
+            
+            // Reset preview
+            outputPreview.style.display = 'none';
+            previewPlaceholder.style.display = 'flex';
+            previewStatus.textContent = '';
         }
         
         // Start capturing and sending frames
@@ -535,6 +659,108 @@
             return Math.random().toString(36).substring(2, 10);
         }
         
+        // Global variables for source switching
+        let hasMultipleSources = false;
+        let sourcesAvailable = [];
+        let currentSourceIndex = 0;
+        
+        // Function to switch source image
+        function switchSource(index) {
+            if (!websocket || websocket.readyState !== WebSocket.OPEN || !hasMultipleSources) {
+                return;
+            }
+            
+            // Only process if the index is valid
+            if (index >= 0 && index < sourcesAvailable.length) {
+                console.log(`Switching to source image ${index + 1}`);
+                
+                // Send command to server
+                const command = {
+                    action: "switch_source",
+                    index: index
+                };
+                
+                websocket.send(JSON.stringify(command));
+            }
+        }
+        
+        // Handle keyboard events for source switching
+        function handleKeyPress(event) {
+            if (!websocket || websocket.readyState !== WebSocket.OPEN || !hasMultipleSources) {
+                return;
+            }
+            
+            // Check for number keys 1-3
+            if (event.key >= '1' && event.key <= '3') {
+                const index = parseInt(event.key) - 1;
+                
+                // Only switch if this source exists
+                if (index < sourcesAvailable.length) {
+                    // Send key press command to server
+                    const command = {
+                        action: "key_press",
+                        key: event.key
+                    };
+                    
+                    websocket.send(JSON.stringify(command));
+                    
+                    // Update UI
+                    updateSourceUI(index);
+                }
+            }
+        }
+        
+        // Update source UI with current selection
+        function updateSourceUI(index) {
+            const sourceControls = document.getElementById('sourceControls');
+            const currentSourceInfo = document.getElementById('currentSourceInfo');
+            const sourceButtons = document.getElementById('sourceButtons');
+            
+            if (sourceControls && currentSourceInfo) {
+                currentSourceIndex = index;
+                currentSourceInfo.textContent = `${index + 1}: ${sourcesAvailable[index]}`;
+                
+                // Update button states
+                const buttons = sourceButtons.querySelectorAll('button');
+                buttons.forEach((btn, i) => {
+                    btn.classList.toggle('active', i === index);
+                });
+            }
+        }
+        
+        // Initialize source switching UI
+        function setupSourceSwitching(sources) {
+            const sourceControls = document.getElementById('sourceControls');
+            const sourceButtons = document.getElementById('sourceButtons');
+            
+            if (!sourceControls || !sourceButtons) return;
+            
+            // Clear existing buttons
+            sourceButtons.innerHTML = '';
+            
+            // Create buttons for each source
+            sources.forEach((source, index) => {
+                const button = document.createElement('button');
+                button.textContent = `${index + 1}: ${source}`;
+                button.onclick = () => switchSource(index);
+                button.style.margin = '5px';
+                
+                // Highlight current source
+                if (index === currentSourceIndex) {
+                    button.classList.add('active');
+                    button.style.backgroundColor = '#27ae60';
+                }
+                
+                sourceButtons.appendChild(button);
+            });
+            
+            // Show the controls
+            sourceControls.style.display = 'block';
+            
+            // Register key handler
+            document.addEventListener('keydown', handleKeyPress);
+        }
+
         // Collect and display connection stats
         function startStatsCollection() {
             if (statsInterval) {

@@ -26,8 +26,11 @@ export LD_LIBRARY_PATH=/usr/local/tensorrt/lib:$LD_LIBRARY_PATH
 #  --cfg configs/trt_infer.yaml
 
 python webrtc_server.py \
-  --port 9000 \
+  --port 8080 \
+  --host 0.0.0.0 \
+  --config-path configs/trt_infer.yaml \
   --source-image assets/examples/source/s2.jpg \
-  --config-path configs/onnx_infer.yaml \
+  --source-image-2 assets/examples/source/s12.jpg \
+  --source-image-3 assets/examples/source/s10.jpg \
   --ssl-cert certs/cert.pem \
   --ssl-key certs/key.pem
