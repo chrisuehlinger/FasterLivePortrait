@@ -46,7 +46,6 @@
             padding: 20px;
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
             width: 100%;
-            max-width: 1060px; /* Wider to span both videos */
             margin-top: 0; /* No top margin needed */
         }
         video {
@@ -138,7 +137,6 @@
         }
         .video-row {
             display: flex;
-            flex-wrap: wrap;
             gap: 20px;
             justify-content: center;
             margin-bottom: 20px;
@@ -167,19 +165,8 @@
         </div>
         
         <div class="control-panel">
-            <h2>Streaming Controls</h2>
-            <div class="form-group">
-                <label for="sessionIdInput">Session ID:</label>
-                <input type="text" id="sessionIdInput" placeholder="Enter a custom session ID or leave blank for random" value="performer1">
-                <p><small>Use a simple, memorable ID to make it easier for viewers to connect</small></p>
-            </div>
-            <div>
-                <button id="startButton">Start Camera</button>
-                <button id="connectButton" disabled>Connect to Server</button>
-                <button id="disconnectButton" disabled>Disconnect</button>
-                <span class="loading" id="loading">Connecting...</span>
-            </div>
             
+            <h2>Streaming Controls</h2>
             <div id="viewerLink"></div>
             
             <div class="status" id="stats"></div>
@@ -208,6 +195,17 @@
             <div>
                 <label for="frameRateInput">Frame Rate: </label>
                 <input type="number" id="frameRateInput" min="1" max="60" value="30">
+            </div>
+            <div class="form-group">
+                <label for="sessionIdInput">Session ID:</label>
+                <input type="text" id="sessionIdInput" placeholder="Enter a custom session ID or leave blank for random" value="performer1">
+                <p><small>Use a simple, memorable ID to make it easier for viewers to connect</small></p>
+            </div>
+            <div>
+                <button id="startButton">Start Camera</button>
+                <button id="connectButton" disabled>Connect to Server</button>
+                <button id="disconnectButton" disabled>Disconnect</button>
+                <span class="loading" id="loading">Connecting...</span>
             </div>
         </div>
     </div>
@@ -803,14 +801,14 @@
                 // Construct a detailed performance report
                 let detailedReport = `PERFORMANCE METRICS:
 Frame Processing Pipeline:
-┌─────────────┬───────────┬────────────┐
-│ Stage       │ Time (ms) │ % of Total │
-├─────────────┼───────────┼────────────┤
-│ Draw to Canvas │ ${avgDrawTime.padStart(7)} │ ${(avgDrawTime / avgTotalTime * 100).toFixed(1).padStart(6)}% │
+┌──────────────────┬───────────┬────────────┐
+│ Stage            │ Time (ms) │ % of Total │
+├──────────────────┼───────────┼────────────┤
+│ Draw to Canvas   │ ${avgDrawTime.padStart(7)} │ ${(avgDrawTime / avgTotalTime * 100).toFixed(1).padStart(6)}% │
 │ JPEG Compression │ ${avgBlobTime.padStart(7)} │ ${(avgBlobTime / avgTotalTime * 100).toFixed(1).padStart(6)}% │
-│ WebSocket Send │ ${avgSendTime.padStart(7)} │ ${(avgSendTime / avgTotalTime * 100).toFixed(1).padStart(6)}% │
-│ TOTAL       │ ${avgTotalTime.padStart(7)} │    100% │
-└─────────────┴───────────┴────────────┘
+│ WebSocket Send   │ ${avgSendTime.padStart(7)} │ ${(avgSendTime / avgTotalTime * 100).toFixed(1).padStart(6)}% │
+│ TOTAL            │ ${avgTotalTime.padStart(7)} │    100% │
+└──────────────────┴───────────┴────────────┘
 
 Network Status:
 - Avg Frame Size: ${avgCompressedSize} KB
@@ -871,6 +869,8 @@ Compression Quality: 70%`;
         window.addEventListener('beforeunload', () => {
             disconnect();
         });
+
+        startCamera();
     </script>
 </body>
 </html>

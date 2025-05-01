@@ -29,8 +29,8 @@ python websocket_server.py \
   --port 8080 \
   --host 0.0.0.0 \
   --config-path configs/trt_infer.yaml \
-  --source-image assets/examples/source/s2.jpg \
-  --source-image-2 assets/examples/source/s12.jpg \
-  --source-image-3 assets/examples/source/s10.jpg \
+  --source-image assets/examples/source/ahau-kin.png \
+  --source-image-2 assets/examples/source/ix-chel.png \
+  --source-image-3 assets/examples/source/chac-bolay.png \
   --ssl-cert certs/cert.pem \
   --ssl-key certs/key.pem

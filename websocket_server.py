@@ -380,7 +380,7 @@ class BaseVideoProcessor:
 
 # FasterLivePortrait video processor
 class FasterLivePortraitProcessor(BaseVideoProcessor):
-    def __init__(self, config_path, src_image_path, src_image_2_path=None, src_image_3_path=None, is_animal=False):
+    def __init__(self, config_path, src_image_path, src_image_2_path=None, src_image_3_path=None, is_animal=False, debug=False):
         """Initialize the processor with source images and config"""
         super().__init__()
         
@@ -402,6 +402,7 @@ class FasterLivePortraitProcessor(BaseVideoProcessor):
         self.src_infos = []
         self.src_originals = []  # Store original images for display/reference
         self.is_animal = is_animal
+        self.debug = debug
         
         try:
             self.pipeline = FasterLivePortraitPipeline(cfg=self.config, is_animal=is_animal)
@@ -556,88 +557,90 @@ class FasterLivePortraitProcessor(BaseVideoProcessor):
             # Add FPS and metadata to output frame
             if out_org is not None:
                 out_org = cv2.cvtColor(out_org, cv2.COLOR_RGB2BGR)
+
+                if self.debug:
                 
-                # Create thumbnail of driving frame
-                thumbnail_height = int(out_org.shape[0] / 4)  # 1/4 of output height
-                thumbnail_width = int(thumbnail_height * frame.shape[1] / frame.shape[0])  # Maintain aspect ratio
-                thumbnail = cv2.resize(frame, (thumbnail_width, thumbnail_height))
-                
-                # Create a position for the thumbnail in the lower right corner with padding
-                padding = 10
-                y_offset = out_org.shape[0] - thumbnail_height - padding
-                x_offset = out_org.shape[1] - thumbnail_width - padding
-                
-                # Add border to thumbnail
-                border_color = (0, 255, 0)  # Green border
-                border_size = 2
-                thumbnail_with_border = cv2.copyMakeBorder(
-                    thumbnail, 
-                    border_size, border_size, border_size, border_size, 
-                    cv2.BORDER_CONSTANT, 
-                    value=border_color
-                )
-                
-                # Create a region of interest in the output image
-                roi_height, roi_width = thumbnail_with_border.shape[:2]
-                roi = out_org[
-                    y_offset:y_offset + roi_height,
-                    x_offset:x_offset + roi_width
-                ]
-                
-                # Calculate alpha blend mask to make thumbnail slightly transparent
-                alpha = 0.7  # 70% opacity
-                # Blend the thumbnail with the background
-                if roi.shape[:2] == thumbnail_with_border.shape[:2]:  # Ensure shapes match
-                    blended_roi = cv2.addWeighted(thumbnail_with_border, alpha, roi, 1-alpha, 0)
-                    out_org[y_offset:y_offset + roi_height, x_offset:x_offset + roi_width] = blended_roi
-                
-                # Add FPS and metadata text
-                info_text = f"FPS: {self.fps} | Frame: {self.frame_counter} | Input: {original_width}x{original_height}"
-                cv2.putText(
-                    out_org,
-                    info_text,
-                    (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 255, 0),
-                    2
-                )
-                
-                # Add source image indicator
-                source_info = f"Source: {self.current_source_index + 1}/{len(self.src_image_paths)}"
-                cv2.putText(
-                    out_org,
-                    source_info,
-                    (10, 70),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 255, 0),
-                    2
-                )
-                
-                # Add source file name
-                source_name = os.path.basename(self.src_image_paths[self.current_source_index])
-                cv2.putText(
-                    out_org,
-                    source_name,
-                    (10, 110),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 255, 0),
-                    2
-                )
-                
-                # Add instructions for source switching
-                instruction_text = "Press 1/2/3 to switch source images" 
-                cv2.putText(
-                    out_org,
-                    instruction_text,
-                    (10, 150),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 255, 255),
-                    2
-                )
+                    # Create thumbnail of driving frame
+                    thumbnail_height = int(out_org.shape[0] / 4)  # 1/4 of output height
+                    thumbnail_width = int(thumbnail_height * frame.shape[1] / frame.shape[0])  # Maintain aspect ratio
+                    thumbnail = cv2.resize(frame, (thumbnail_width, thumbnail_height))
+                    
+                    # Create a position for the thumbnail in the lower right corner with padding
+                    padding = 10
+                    y_offset = out_org.shape[0] - thumbnail_height - padding
+                    x_offset = out_org.shape[1] - thumbnail_width - padding
+                    
+                    # Add border to thumbnail
+                    border_color = (0, 255, 0)  # Green border
+                    border_size = 2
+                    thumbnail_with_border = cv2.copyMakeBorder(
+                        thumbnail, 
+                        border_size, border_size, border_size, border_size, 
+                        cv2.BORDER_CONSTANT, 
+                        value=border_color
+                    )
+                    
+                    # Create a region of interest in the output image
+                    roi_height, roi_width = thumbnail_with_border.shape[:2]
+                    roi = out_org[
+                        y_offset:y_offset + roi_height,
+                        x_offset:x_offset + roi_width
+                    ]
+                    
+                    # Calculate alpha blend mask to make thumbnail slightly transparent
+                    alpha = 0.7  # 70% opacity
+                    # Blend the thumbnail with the background
+                    if roi.shape[:2] == thumbnail_with_border.shape[:2]:  # Ensure shapes match
+                        blended_roi = cv2.addWeighted(thumbnail_with_border, alpha, roi, 1-alpha, 0)
+                        out_org[y_offset:y_offset + roi_height, x_offset:x_offset + roi_width] = blended_roi
+                    
+                    # Add FPS and metadata text
+                    info_text = f"FPS: {self.fps} | Frame: {self.frame_counter} | Input: {original_width}x{original_height}"
+                    cv2.putText(
+                        out_org,
+                        info_text,
+                        (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 255, 0),
+                        2
+                    )
+                    
+                    # Add source image indicator
+                    source_info = f"Source: {self.current_source_index + 1}/{len(self.src_image_paths)}"
+                    cv2.putText(
+                        out_org,
+                        source_info,
+                        (10, 70),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 255, 0),
+                        2
+                    )
+                    
+                    # Add source file name
+                    source_name = os.path.basename(self.src_image_paths[self.current_source_index])
+                    cv2.putText(
+                        out_org,
+                        source_name,
+                        (10, 110),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (0, 255, 0),
+                        2
+                    )
+                    
+                    # Add instructions for source switching
+                    instruction_text = "Press 1/2/3 to switch source images" 
+                    cv2.putText(
+                        out_org,
+                        instruction_text,
+                        (10, 150),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (0, 255, 255),
+                        2
+                    )
                 
                 return out_org
             
@@ -654,6 +657,9 @@ class Server:
         self.app = FastAPI()
         self.connection_manager = ConnectionManager()
         self.config = config
+        
+        self._setup_routes()
+        self._setup_middleware()
         
         # Try to initialize FasterLivePortrait processor, fall back to basic if it fails
         try:
@@ -702,7 +708,8 @@ class Server:
                     src_image_path=config.source_image,
                     src_image_2_path=config.source_image_2 if config.source_image_2 and os.path.isfile(config.source_image_2) else None,
                     src_image_3_path=config.source_image_3 if config.source_image_3 and os.path.isfile(config.source_image_3) else None,
-                    is_animal=config.is_animal
+                    is_animal=config.is_animal,
+                    debug=config.debug,
                 )
                 logger.info(f"Successfully initialized FasterLivePortrait processor with {len(source_images)} source images")
                 
@@ -722,12 +729,7 @@ class Server:
             
         except Exception as e:
             logger.error(f"Failed to initialize FasterLivePortrait processor: {e}")
-            logger.info("Falling back to basic video processor")
-            self.processor = BaseVideoProcessor()
-            self.has_multiple_sources = False
-        
-        self._setup_routes()
-        self._setup_middleware()
+            exit(1)
         
     def _setup_middleware(self):
         self.app.add_middleware(
@@ -919,6 +921,7 @@ def main():
     parser.add_argument("--source-image", default="assets/examples/source/s2.jpg", help="Path to primary source image to animate")
     parser.add_argument("--source-image-2", help="Path to second source image to animate")
     parser.add_argument("--source-image-3", help="Path to third source image to animate")
+    parser.add_argument("--debug", action="store_true", help="Show Debug stats")
     parser.add_argument("--is-animal", action="store_true", help="Use animal model")
     parser.add_argument("--use-basic-processor", action="store_true", help="Use basic OpenCV processor instead of FasterLivePortrait")
     parser.add_argument("--ssl-cert", help="SSL certificate file")
