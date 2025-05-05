@@ -7,11 +7,11 @@ WORKDIR /root/FasterLivePortrait
 RUN pip install -r requirements.txt
 
 # Setup frontend
-# WORKDIR /root/FasterLivePortrait/frontend
-# COPY ./frontend/package.json /root/FasterLivePortrait/frontend/package.json
-# RUN npm install
-# COPY ./frontend /root/FasterLivePortrait/frontend
-# RUN npm run build
+WORKDIR /root/FasterLivePortrait/frontend
+COPY ./frontend/package.json /root/FasterLivePortrait/frontend/package.json
+RUN npm install
+COPY ./frontend /root/FasterLivePortrait/frontend
+RUN npm run build
 WORKDIR /root/FasterLivePortrait
 
 COPY ./spd_editor /root/FasterLivePortrait/spd_editor

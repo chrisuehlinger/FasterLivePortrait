@@ -15,6 +15,14 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple, Union, Callable
 
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s: %(message)s"
+)
+logger = logging.getLogger("spd_editor.gui")
+
 # Check if tkinter is available
 TKINTER_AVAILABLE = False
 try:
@@ -60,13 +68,6 @@ from spd_editor.spd.validator import (
 from spd_editor.utils.visualization import (
     draw_landmarks, LandmarkVisualizationOptions
 )
-
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(levelname)s: %(message)s"
-)
-logger = logging.getLogger("spd_editor.gui")
 
 # Try to import matplotlib for 3D visualization
 HAVE_PLT = False
