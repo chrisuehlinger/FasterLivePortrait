@@ -12,20 +12,26 @@ import numpy as np
 import cv2
 from typing import List, Dict, Tuple, Optional, Union, Any
 import sys
+import importlib.util
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Add the parent directory to the path for importing FasterLivePortrait modules
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Check if required modules are available
+SRC_AVAILABLE = importlib.util.find_spec("src") is not None
+if not SRC_AVAILABLE:
+    logger.warning("'src' module not found. Using OpenCV fallback for face detection.")
 
 
 class FaceDetector:
     """
-    Wrapper for FasterLivePortrait's face detection functionality.
+    Wrapper for facial detection functionality with fallbacks.
     
     This class provides methods to detect faces in images and return
     bounding boxes and confidence scores.
@@ -54,6 +60,9 @@ class FaceDetector:
         self.model = None
         self.initialized = False
         self.face_objects = []  # Store face objects for test access
+        self.model_type = None  # Type of detection model being used
+        self.opencv_face_detector = None
+        self.opencv_landmark_detector = None
         
         # Try to initialize model if possible
         self._initialize_model()
@@ -64,48 +73,78 @@ class FaceDetector:
         
         This is separated from __init__ to allow lazy loading.
         """
-        try:
-            from src.models.face_analysis_model import FaceAnalysisModel
-            from src.models.predictor import get_predictor
-            
-            # If no model path provided, use default
-            if self.model_path is None:
-                base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-                model_paths = [
-                    os.path.join(base_dir, "checkpoints/liveportrait_onnx/retinaface_det_static.trt"),
-                    os.path.join(base_dir, "checkpoints/liveportrait_onnx/face_2dpose_106_static.trt")
-                ]
+        # Try to initialize FasterLivePortrait model if available
+        if SRC_AVAILABLE:
+            try:
+                from src.models.face_analysis_model import FaceAnalysisModel
                 
-                # Fall back to ONNX if TRT not available
-                if not os.path.exists(model_paths[0]) and self.predict_type == "trt":
-                    logger.warning("TensorRT model not found, falling back to ONNX")
+                # If no model path provided, use default
+                if self.model_path is None:
+                    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
                     model_paths = [
-                        os.path.join(base_dir, "checkpoints/liveportrait_onnx/retinaface_det_static.onnx"),
-                        os.path.join(base_dir, "checkpoints/liveportrait_onnx/face_2dpose_106_static.onnx")
+                        os.path.join(base_dir, "checkpoints/liveportrait_onnx/retinaface_det_static.trt"),
+                        os.path.join(base_dir, "checkpoints/liveportrait_onnx/face_2dpose_106_static.trt")
                     ]
-                    self.predict_type = "ort"
-            else:
-                # If custom model path is provided
-                if isinstance(self.model_path, str):
-                    model_paths = [self.model_path]
+                    
+                    # Fall back to ONNX if TRT not available
+                    if not os.path.exists(model_paths[0]) and self.predict_type == "trt":
+                        logger.warning("TensorRT model not found, falling back to ONNX")
+                        model_paths = [
+                            os.path.join(base_dir, "checkpoints/liveportrait_onnx/retinaface_det_static.onnx"),
+                            os.path.join(base_dir, "checkpoints/liveportrait_onnx/face_2dpose_106_static.onnx")
+                        ]
+                        self.predict_type = "ort"
                 else:
-                    model_paths = self.model_path
+                    # If custom model path is provided
+                    if isinstance(self.model_path, str):
+                        model_paths = [self.model_path]
+                    else:
+                        model_paths = self.model_path
+                
+                # Check if models exist
+                if not os.path.exists(model_paths[0]):
+                    logger.error(f"Model file not found: {model_paths[0]}")
+                    # Will fall back to OpenCV
+                else:
+                    # Create model instance
+                    model_kwargs = {
+                        "predict_type": self.predict_type,
+                        "model_path": model_paths
+                    }
+                    self.model = FaceAnalysisModel(**model_kwargs)
+                    self.model.det_thresh = self.det_thresh
+                    self.model.nms_thresh = self.nms_thresh
+                    self.initialized = True
+                    self.model_type = "face_analysis_model"
+                    logger.info(f"Face detector initialized successfully with {self.predict_type} backend")
+                    return
             
-            # Create model instance
-            model_kwargs = {
-                "predict_type": self.predict_type,
-                "model_path": model_paths
-            }
-            self.model = FaceAnalysisModel(**model_kwargs)
-            self.model.det_thresh = self.det_thresh
-            self.model.nms_thresh = self.nms_thresh
-            self.initialized = True
-            logger.info(f"Face detector initialized successfully with {self.predict_type} backend")
+            except ImportError as e:
+                logger.error(f"Failed to import required modules: {e}")
+            except Exception as e:
+                logger.error(f"Failed to initialize face detector: {e}")
+        
+        # Fall back to OpenCV's built-in face detection
+        try:
+            # Initialize OpenCV's built-in face detector
+            face_cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
             
-        except ImportError as e:
-            logger.error(f"Failed to import required modules: {e}")
+            if os.path.exists(face_cascade_path):
+                self.opencv_face_detector = cv2.CascadeClassifier(face_cascade_path)
+                
+                # Try to initialize facial landmark detector if available
+                landmark_model_path = cv2.data.haarcascades + '../lbpcascades/lbpcascade_frontalface.xml'
+                if os.path.exists(landmark_model_path):
+                    self.opencv_landmark_detector = cv2.face.createFacemarkLBF()
+                    self.opencv_landmark_detector.loadModel(landmark_model_path)
+                
+                self.initialized = True
+                self.model_type = "opencv"
+                logger.info("Face detector initialized with OpenCV fallback")
+            else:
+                logger.error(f"OpenCV Haar cascade file not found: {face_cascade_path}")
         except Exception as e:
-            logger.error(f"Failed to initialize face detector: {e}")
+            logger.error(f"Failed to initialize OpenCV face detector: {e}")
     
     def detect(self, image: np.ndarray) -> List[Dict[str, Any]]:
         """
@@ -115,15 +154,7 @@ class FaceDetector:
             image: Input image in BGR format (OpenCV format)
             
         Returns:
-            List of dictionaries containing face detection results:
-            [
-                {
-                    'bbox': [x1, y1, x2, y2],  # Bounding box coordinates
-                    'confidence': float,        # Detection confidence
-                    'landmark': np.ndarray,     # Face landmarks if available
-                },
-                ...
-            ]
+            List of dictionaries containing face detection results
         """
         if not self.initialized:
             self._initialize_model()
@@ -139,62 +170,51 @@ class FaceDetector:
             elif image.shape[2] == 4:  # RGBA
                 image = cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
                 
-            # Detect faces using the model
-            landmarks_list = self.model.predict(image)
-            
-            # Store face objects for testing purposes
-            if hasattr(self.model, 'face_objects'):
-                self.face_objects = self.model.face_objects
-            
-            # Convert to standardized output format
-            results = []
-            if not landmarks_list:
-                return results
+            if self.model_type == "face_analysis_model":
+                # Detect faces using the FasterLivePortrait model
+                landmarks_list = self.model.predict(image)
                 
-            # Access internal face data from the model to get bounding boxes
-            for i, landmark in enumerate(landmarks_list):
-                # Try to get the underlying Face object that has bbox and confidence
-                if hasattr(self.model, 'face_objects') and len(self.model.face_objects) > i:
-                    face_obj = self.model.face_objects[i]
-                    bbox = face_obj.bbox
-                    confidence = face_obj.det_score
-                else:
-                    # If we don't have direct access to the Face objects,
-                    # estimate a bounding box from landmarks
-                    if landmark is not None and len(landmark) > 0:
-                        x1 = np.min(landmark[:, 0])
-                        y1 = np.min(landmark[:, 1])
-                        x2 = np.max(landmark[:, 0])
-                        y2 = np.max(landmark[:, 1])
-                        bbox = np.array([x1, y1, x2, y2])
-                        confidence = 1.0  # No confidence available
+                # Store face objects for testing purposes
+                if hasattr(self.model, 'face_objects'):
+                    self.face_objects = self.model.face_objects
+                
+                # Convert to standardized output format
+                results = []
+                if not landmarks_list:
+                    return results
+                    
+                # Access internal face data from the model to get bounding boxes
+                for i, landmark in enumerate(landmarks_list):
+                    # Try to get the underlying Face object that has bbox and confidence
+                    if hasattr(self.model, 'face_objects') and len(self.model.face_objects) > i:
+                        face_obj = self.model.face_objects[i]
+                        bbox = face_obj.bbox
+                        confidence = face_obj.det_score
                     else:
-                        continue
-                        
-                results.append({
-                    'bbox': bbox,
-                    'confidence': confidence,
-                    'landmark': landmark
-                })
+                        # If we don't have direct access to the Face objects,
+                        # estimate a bounding box from landmarks
+                        if landmark is not None and len(landmark) > 0:
+                            x1 = np.min(landmark[:, 0])
+                            y1 = np.min(landmark[:, 1])
+                            x2 = np.max(landmark[:, 0])
+                            y2 = np.max(landmark[:, 1])
+                            bbox = np.array([x1, y1, x2, y2])
+                            confidence = 1.0  # No confidence available
+                        else:
+                            continue
+                            
+                    results.append({
+                        'bbox': bbox,
+                        'confidence': confidence,
+                        'landmark': landmark
+                    })
                 
-            return results
-            
-        except Exception as e:
-            logger.error(f"Error in face detection: {e}")
-            return []
-            
-    def detect_largest_face(self, image: np.ndarray) -> Optional[Dict[str, Any]]:
-        """
-        Detect the largest face in an image.
-        
-        Args:
-            image: Input image in BGR format (OpenCV format)
-            
-        Returns:
-            Dictionary containing face detection results for the largest face,
-            or None if no face is detected.
-        """
-        faces = self.detect(image)
+            elif self.model_type == "opencv":
+                # Detect faces using OpenCV
+                # Convert to grayscale for detection
+                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                
+                # Detect faces
         
         if not faces:
             return None

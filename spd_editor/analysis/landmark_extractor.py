@@ -11,6 +11,7 @@ import logging
 import numpy as np
 import cv2
 import sys
+import importlib.util
 from typing import List, Dict, Tuple, Optional, Union, Any
 
 # Add the parent directory to the path for importing FasterLivePortrait modules
@@ -21,6 +22,19 @@ if parent_dir not in sys.path:
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Check if required modules are available
+SRC_AVAILABLE = importlib.util.find_spec("src") is not None
+if not SRC_AVAILABLE:
+    logger.warning("'src' module not found. Landmark extraction will be limited.")
+
+# Try to import MediaPipe as a fallback
+MEDIAPIPE_AVAILABLE = False
+try:
+    import mediapipe as mp
+    MEDIAPIPE_AVAILABLE = True
+except ImportError:
+    logger.warning("MediaPipe not available for fallback landmark detection.")
 
 
 class LandmarkExtractor:
@@ -49,76 +63,92 @@ class LandmarkExtractor:
         self.landmark_type = landmark_type
         self.model = None
         self.landmark_model = None
+        self.mediapipe_model = None
         self.initialized = False
-        self.mediapipe_available = False
+        self.mediapipe_available = MEDIAPIPE_AVAILABLE
         
         # Try to initialize model if possible
         self._initialize_model()
-        
+    
     def _initialize_model(self):
         """
         Initialize the landmark extraction model.
         
         This is separated from __init__ to allow lazy loading.
         """
+        if not SRC_AVAILABLE and not self.mediapipe_available:
+            logger.error("Cannot initialize landmark extractor: neither 'src' nor 'mediapipe' are available")
+            return
+            
         try:
-            # Try to import FasterLivePortrait models
-            from src.models.landmark_model import LandmarkModel
-            from src.models.mediapipe_face_model import MediaPipeFaceModel
-            
-            # If no model path provided, use default
-            if self.model_path is None:
-                base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+            if SRC_AVAILABLE:
+                # Try to import FasterLivePortrait models
+                from src.models.landmark_model import LandmarkModel
                 
-                if self.landmark_type == "2d":
-                    # Use 2D landmark model
-                    if self.predict_type == "trt":
-                        model_path = os.path.join(base_dir, "checkpoints/liveportrait_onnx/face_2dpose_106_static.trt")
-                        if not os.path.exists(model_path):
-                            logger.warning("TensorRT model not found, falling back to ONNX")
+                # If no model path provided, use default
+                if self.model_path is None:
+                    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+                    
+                    if self.landmark_type == "2d":
+                        # Use 2D landmark model
+                        if self.predict_type == "trt":
+                            model_path = os.path.join(base_dir, "checkpoints/liveportrait_onnx/face_2dpose_106_static.trt")
+                            if not os.path.exists(model_path):
+                                logger.warning("TensorRT model not found, falling back to ONNX")
+                                model_path = os.path.join(base_dir, "checkpoints/liveportrait_onnx/face_2dpose_106_static.onnx")
+                                self.predict_type = "ort"
+                        else:
                             model_path = os.path.join(base_dir, "checkpoints/liveportrait_onnx/face_2dpose_106_static.onnx")
-                            self.predict_type = "ort"
                     else:
-                        model_path = os.path.join(base_dir, "checkpoints/liveportrait_onnx/face_2dpose_106_static.onnx")
+                        # For 3D landmarks, could use different model
+                        if self.predict_type == "trt":
+                            model_path = os.path.join(base_dir, "checkpoints/liveportrait_onnx/face_2dpose_106_static.trt")
+                            if not os.path.exists(model_path):
+                                logger.warning("TensorRT model not found, falling back to ONNX")
+                                model_path = os.path.join(base_dir, "checkpoints/liveportrait_onnx/face_2dpose_106_static.onnx")
+                                self.predict_type = "ort"
+                        else:
+                            model_path = os.path.join(base_dir, "checkpoints/liveportrait_onnx/face_2dpose_106_static.onnx")
                 else:
-                    # For 3D landmarks, could use different model
-                    if self.predict_type == "trt":
-                        model_path = os.path.join(base_dir, "checkpoints/liveportrait_onnx/face_2dpose_106_static.trt")
-                        if not os.path.exists(model_path):
-                            logger.warning("TensorRT model not found, falling back to ONNX")
-                            model_path = os.path.join(base_dir, "checkpoints/liveportrait_onnx/face_2dpose_106_static.onnx")
-                            self.predict_type = "ort"
-                    else:
-                        model_path = os.path.join(base_dir, "checkpoints/liveportrait_onnx/face_2dpose_106_static.onnx")
-            else:
-                model_path = self.model_path
-            
-            # Try to create the landmark model
-            model_kwargs = {
-                "predict_type": self.predict_type,
-                "model_path": model_path,
-            }
-            
-            try:
-                # Try to initialize the landmark model
-                self.landmark_model = LandmarkModel(**model_kwargs)
-                self.model = "landmark_model"
-                self.initialized = True
-                logger.info(f"Landmark extractor initialized with LandmarkModel using {self.predict_type} backend")
-            except Exception as e:
-                logger.warning(f"Failed to initialize LandmarkModel: {e}. Trying MediaPipe as fallback.")
+                    model_path = self.model_path
                 
-                # Try MediaPipe as fallback
+                # Check if model exists
+                if not os.path.exists(model_path):
+                    logger.error(f"Model file not found: {model_path}")
+                    # Will try MediaPipe below if available
+                else:
+                    # Try to create the landmark model
+                    model_kwargs = {
+                        "predict_type": self.predict_type,
+                        "model_path": model_path,
+                    }
+                    
+                    try:
+                        # Try to initialize the landmark model
+                        self.landmark_model = LandmarkModel(**model_kwargs)
+                        self.model = "landmark_model"
+                        self.initialized = True
+                        logger.info(f"Landmark extractor initialized with LandmarkModel using {self.predict_type} backend")
+                        return
+                    except Exception as e:
+                        logger.warning(f"Failed to initialize LandmarkModel: {e}. Trying MediaPipe as fallback.")
+            
+            # Try MediaPipe as fallback if available
+            if self.mediapipe_available:
                 try:
-                    import mediapipe as mp
-                    self.mediapipe_model = MediaPipeFaceModel()
+                    # Using MediaPipe's FaceMesh for landmark extraction
+                    mp_face_mesh = mp.solutions.face_mesh
+                    self.mediapipe_model = mp_face_mesh.FaceMesh(
+                        static_image_mode=True,
+                        max_num_faces=1,
+                        min_detection_confidence=0.5,
+                        min_tracking_confidence=0.5
+                    )
                     self.model = "mediapipe"
-                    self.mediapipe_available = True
                     self.initialized = True
                     logger.info("Landmark extractor initialized with MediaPipe (fallback)")
-                except ImportError:
-                    logger.error("MediaPipe not available as fallback")
-                    raise
+                except Exception as e:
+                    logger.error(f"Failed to initialize MediaPipe: {e}")
             
         except ImportError as e:
             logger.error(f"Failed to import required modules: {e}")
@@ -171,15 +201,21 @@ class LandmarkExtractor:
                     landmarks = self.landmark_model.predict(image, initial_landmarks)
                 else:
                     # No initial landmarks, need to detect first
-                    from src.models.face_analysis_model import FaceAnalysisModel
-                    temp_detector = FaceAnalysisModel(
-                        predict_type=self.predict_type,
-                        model_path=[self.model_path]
-                    )
-                    faces = temp_detector.predict(image)
-                    if not faces:
+                    try:
+                        from src.models.face_analysis_model import FaceAnalysisModel
+                        
+                        # Use FaceAnalysisModel for one-off detection
+                        temp_detector = FaceAnalysisModel(
+                            predict_type=self.predict_type,
+                            model_path=[self.model_path]
+                        )
+                        faces = temp_detector.predict(image)
+                        if not faces:
+                            return None
+                        landmarks = faces[0]  # Take the first face
+                    except ImportError:
+                        logger.error("FaceAnalysisModel not available for landmark detection")
                         return None
-                    landmarks = faces[0]  # Take the first face
                 
                 return landmarks
                 
@@ -191,12 +227,22 @@ class LandmarkExtractor:
                 else:
                     rgb_image = image
                 
-                results = self.mediapipe_model.predict(rgb_image)
-                if not results:
+                # Process the image to find face landmarks
+                results = self.mediapipe_model.process(rgb_image)
+                if not results.multi_face_landmarks:
                     return None
-                    
-                return results[0]  # Return the first face's landmarks
-            
+                
+                # Convert MediaPipe landmarks to numpy array in image coordinates
+                height, width = image.shape[:2]
+                landmarks = []
+                for landmark in results.multi_face_landmarks[0].landmark:
+                    # Convert normalized coordinates to pixel coordinates
+                    x = landmark.x * width
+                    y = landmark.y * height
+                    landmarks.append([x, y])
+                
+                return np.array(landmarks)
+                
             logger.error("No valid landmark extraction method available")
             return None
             
@@ -220,7 +266,7 @@ class LandmarkExtractor:
         return [self.extract_landmarks(image, face_detection) 
                 for face_detection in face_detections]
     
-    def get_landmark_types(self) -> Dict[str, int]:
+    def get_landmark_types(self) -> Dict[str, List[int]]:
         """
         Get information about available landmark types and their indices.
         

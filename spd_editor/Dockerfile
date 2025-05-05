@@ -2,6 +2,12 @@ FROM uehreka/flp-base:latest
 
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y \
+    python3-tk \
+    libgl1-mesa-glx \
+    python3-pil.imagetk \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install Python dependencies with GPU support
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

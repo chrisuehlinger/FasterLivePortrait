@@ -15,6 +15,10 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple, Union, Callable
 
+# Add the project root directory to the Python path to make src modules accessible
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 # Set up logging
 logging.basicConfig(
@@ -59,7 +63,7 @@ except ImportError:
 from spd_editor.spd.reader import SPDReader, SPDError, SPDSectionError
 from spd_editor.spd.writer import SPDWriter
 from spd_editor.spd.format import (
-    HeaderFlags, ImageSection, LandmarksSection, 
+    HeaderFlags, ImageSection, LandmarksSection, LandmarksSection, 
     MotionParamsSection, MaskSection
 )
 from spd_editor.spd.validator import (
@@ -68,6 +72,17 @@ from spd_editor.spd.validator import (
 from spd_editor.utils.visualization import (
     draw_landmarks, LandmarkVisualizationOptions
 )
+
+# Import face detection and landmark extraction modules
+try:
+    from spd_editor.analysis.face_detector import FaceDetector
+    from spd_editor.analysis.landmark_extractor import LandmarkExtractor
+    HAVE_FACE_DETECTION = True
+except ImportError:
+    HAVE_FACE_DETECTION = False
+    logger.warning("Face detection modules not available. Face detection will be disabled.")
+    FaceDetector = lambda *args, **kwargs: None
+    LandmarkExtractor = lambda *args, **kwargs: None
 
 # Try to import matplotlib for 3D visualization
 HAVE_PLT = False
@@ -115,6 +130,7 @@ class SPDEditorApp:
         self.progress_var = tk.DoubleVar(value=0)
         self.show_landmarks = tk.BooleanVar(value=True)
         self.show_labels = tk.BooleanVar(value=False)
+        self._pan_start = None
         
         # Create the UI
         self._create_menu()
@@ -204,6 +220,11 @@ class SPDEditorApp:
         self.canvas.configure(xscrollcommand=h_scrollbar.set, yscrollcommand=v_scrollbar.set)
         self.canvas.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         
+        # Add panning with middle mouse button
+        self.canvas.bind("<ButtonPress-2>", self._start_pan)
+        self.canvas.bind("<B2-Motion>", self._pan_image)
+        self.canvas.bind("<ButtonRelease-2>", self._end_pan)
+        
         # Right panel - Parameters and controls
         right_frame = ttk.Frame(self.paned_window, width=SIDEBAR_WIDTH)
         self.paned_window.add(right_frame, weight=1)
@@ -231,6 +252,37 @@ class SPDEditorApp:
         # Status text
         status_label = ttk.Label(status_frame, textvariable=self.status_text, anchor=tk.W)
         status_label.pack(side=tk.RIGHT)
+    
+    def _start_pan(self, event):
+        """Start panning the canvas.
+        
+        Args:
+            event: The mouse event
+        """
+        self.canvas.config(cursor="fleur")  # Change cursor to indicate panning
+        self._pan_start = (event.x, event.y)
+    
+    def _pan_image(self, event):
+        """Pan the canvas.
+        
+        Args:
+            event: The mouse event
+        """
+        if self._pan_start:
+            dx = self._pan_start[0] - event.x
+            dy = self._pan_start[1] - event.y
+            self.canvas.xview_scroll(int(dx), "units")
+            self.canvas.yview_scroll(int(dy), "units")
+            self._pan_start = (event.x, event.y)
+    
+    def _end_pan(self, event):
+        """End panning the canvas.
+        
+        Args:
+            event: The mouse event
+        """
+        self.canvas.config(cursor="")  # Reset cursor
+        self._pan_start = None
     
     def _create_file_info_section(self, parent: ttk.Frame):
         """Create the file information section.
@@ -741,12 +793,63 @@ class SPDEditorApp:
                             data=img.tobytes()
                         )
                         writer.write_image_section(img_section)
+                        self.root.after(0, lambda: self.status_text.set("Image section added..."))
+                        self.root.after(0, lambda: self.progress_var.set(30))
                         
-                        # Since we don't have landmark extraction implemented in the GUI yet,
-                        # we'll just show a message that this would normally extract and add landmarks
+                        # Extract landmarks if face detection is available
+                        landmarks_added = False
+                        if HAVE_FACE_DETECTION and HAVE_CV2:
+                            try:
+                                self.root.after(0, lambda: self.status_text.set("Detecting face..."))
+                                # Initialize face detector with ONNX (more widely compatible)
+                                face_detector = FaceDetector(predict_type="ort")
+                                
+                                # Detect faces in the image
+                                faces = face_detector.detect(img)
+                                
+                                if faces:
+                                    self.root.after(0, lambda: self.status_text.set("Extracting landmarks..."))
+                                    self.root.after(0, lambda: self.progress_var.set(50))
+                                    
+                                    # Get the largest face (typically the most prominent)
+                                    largest_face = face_detector.detect_largest_face(img)
+                                    
+                                    if largest_face:
+                                        # Initialize landmark extractor
+                                        landmark_extractor = LandmarkExtractor(predict_type="ort")
+                                        
+                                        # Extract landmarks
+                                        landmarks = landmark_extractor.extract_landmarks(img, largest_face)
+                                        
+                                        if landmarks is not None and len(landmarks) > 0:
+                                            # Determine the landmark type and dimensions
+                                            landmark_type = "face_landmarks"
+                                            dimensions = 2  # Most facial landmarks are 2D
+                                            
+                                            # Create landmarks section
+                                            landmarks_section = LandmarksSection(
+                                                count=len(landmarks),
+                                                dimensions=dimensions,
+                                                landmark_type=landmark_type,
+                                                points=landmarks.tolist()
+                                            )
+                                            
+                                            # Write landmarks section
+                                            writer.write_landmarks_section(landmarks_section)
+                                            self.root.after(0, lambda: self.status_text.set("Landmarks section added..."))
+                                            self.root.after(0, lambda: self.progress_var.set(70))
+                                            landmarks_added = True
+                            except Exception as e:
+                                logger.error(f"Error extracting landmarks: {e}")
+                                self.root.after(0, lambda: self.status_text.set(f"Error extracting landmarks: {e}"))
+                        
+                        if not landmarks_added:
+                            self.root.after(0, lambda: self.status_text.set("No landmarks detected or face detection unavailable"))
                         
                         # Finalize SPD file
                         writer.finalize()
+                        self.root.after(0, lambda: self.status_text.set("SPD file created"))
+                        self.root.after(0, lambda: self.progress_var.set(100))
                     
                     # Open the newly created file
                     self.root.after(0, lambda: self.load_file(output_path))

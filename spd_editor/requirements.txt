@@ -1,3 +1,4 @@
+# Python package dependencies
 numpy>=1.20.0
 opencv-python>=4.5.0
 pillow>=8.0.0
@@ -5,3 +6,13 @@ matplotlib>=3.5.0
 torch>=1.10.0
 scipy>=1.7.0
 tqdm>=4.60.0
+
+# NOTE: For Docker, the following system packages are required:
+# - python3-tk (for tkinter GUI)
+# - libgl1-mesa-glx (for OpenCV)
+# - python3-pil.imagetk (for PIL ImageTk)
+# Install them in the Dockerfile with:
+# RUN apt-get update && apt-get install -y \
+#     python3-tk \
+#     libgl1-mesa-glx \
+#     python3-pil.imagetk
