@@ -8,10 +8,8 @@
         body {
             font-family: Arial, sans-serif;
             margin: 0;
-            padding: 20px;
             background-color: #f0f0f0;
             color: #333;
-            max-width: 1400px; /* Increased to accommodate side-by-side videos */
             margin: 0 auto;
         }
         h1 {
@@ -48,10 +46,19 @@
             width: 100%;
             margin-top: 0; /* No top margin needed */
         }
-        video {
+        .hud {
+            display: flex;
             width: 100%;
+            height: 100vh;
+            white-space: nowrap;
+        }
+        video {
+            width: 50%;
+            height: 100vh;
             border-radius: 4px;
             background-color: #000;
+            object-fit: cover;
+            transform: scaleX(-1);
         }
         button {
             background-color: #3498db;
@@ -97,7 +104,6 @@
             background-color: #f9f9f9;
             padding: 10px;
             border-radius: 4px;
-            white-space: pre-wrap;
         }
         .form-group {
             margin-bottom: 15px;
@@ -115,12 +121,12 @@
             box-sizing: border-box;
         }
         #outputPreview {
-            width: 100%;
-            border-radius: 4px;
+            width: 50%;
+            height: 100vh;
+            transform: scaleX(-1);
             background-color: #000;
             display: block;
-            max-height: 360px;
-            object-fit: contain;
+            object-fit: cover;
         }
         .preview-placeholder {
             width: 100%;
@@ -144,13 +150,15 @@
     </style>
 </head>
 <body>
-    <h1>FasterLivePortrait - Actor Streaming</h1>
+    <div class="hud">
+        <video id="localVideo" autoplay muted playsinline></video>
+        <img id="outputPreview">
+    </div>
     
     <div class="container">
         <div class="video-row">
             <div class="video-container">
                 <h2>Your Camera Feed</h2>
-                <video id="localVideo" autoplay muted playsinline></video>
                 <div class="status" id="connectionStatus">Not connected</div>
             </div>
             
@@ -159,7 +167,6 @@
                 <div class="preview-placeholder" id="previewPlaceholder">
                     Connect to the server to see a preview of what viewers will see
                 </div>
-                <img id="outputPreview" style="display: none;">
                 <div class="status" id="previewStatus"></div>
             </div>
         </div>
@@ -684,6 +691,11 @@
         
         // Handle keyboard events for source switching
         function handleKeyPress(event) {
+            if (event.key === ' ') {
+                console.log('HEYO')
+                event.preventDefault(); // Prevent default space key behavior
+                connectToServer();
+            }
             if (!websocket || websocket.readyState !== WebSocket.OPEN || !hasMultipleSources) {
                 return;
             }
@@ -756,8 +768,8 @@
             sourceControls.style.display = 'block';
             
             // Register key handler
-            document.addEventListener('keydown', handleKeyPress);
         }
+        document.addEventListener('keydown', handleKeyPress);
 
         // Collect and display connection stats
         function startStatsCollection() {
@@ -775,7 +787,7 @@
             detailedStatsContainer.style.marginTop = '20px';
             detailedStatsContainer.style.fontFamily = 'monospace';
             detailedStatsContainer.style.fontSize = '14px';
-            detailedStatsContainer.style.whiteSpace = 'pre-line';
+            detailedStatsContainer.style.whiteSpace = 'pre';
             stats.parentNode.insertBefore(detailedStatsContainer, stats.nextSibling);
             
             statsInterval = setInterval(() => {
@@ -804,10 +816,10 @@ Frame Processing Pipeline:
 ┌──────────────────┬───────────┬────────────┐
 │ Stage            │ Time (ms) │ % of Total │
 ├──────────────────┼───────────┼────────────┤
-│ Draw to Canvas   │ ${avgDrawTime.padStart(7)} │ ${(avgDrawTime / avgTotalTime * 100).toFixed(1).padStart(6)}% │
-│ JPEG Compression │ ${avgBlobTime.padStart(7)} │ ${(avgBlobTime / avgTotalTime * 100).toFixed(1).padStart(6)}% │
-│ WebSocket Send   │ ${avgSendTime.padStart(7)} │ ${(avgSendTime / avgTotalTime * 100).toFixed(1).padStart(6)}% │
-│ TOTAL            │ ${avgTotalTime.padStart(7)} │    100% │
+│ Draw to Canvas   │  ${avgDrawTime.padStart(8)} │  ${(avgDrawTime / avgTotalTime * 100).toFixed(1).padStart(8)}% │
+│ JPEG Compression │  ${avgBlobTime.padStart(8)} │  ${(avgBlobTime / avgTotalTime * 100).toFixed(1).padStart(8)}% │
+│ WebSocket Send   │  ${avgSendTime.padStart(8)} │  ${(avgSendTime / avgTotalTime * 100).toFixed(1).padStart(8)}% │
+│ TOTAL            │  ${avgTotalTime.padStart(8)} │       100% │
 └──────────────────┴───────────┴────────────┘
 
 Network Status:
