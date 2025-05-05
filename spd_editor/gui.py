@@ -12,6 +12,7 @@ import sys
 import logging
 import threading
 import tempfile
+import argparse
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple, Union, Callable
 
@@ -271,8 +272,8 @@ class SPDEditorApp:
         if self._pan_start:
             dx = self._pan_start[0] - event.x
             dy = self._pan_start[1] - event.y
-            self.canvas.xview_scroll(int(dx), "units")
-            self.canvas.yview_scroll(int(dy), "units")
+            self.canvas.xview_scroll(int(dx/10), "units")
+            self.canvas.yview_scroll(int(dy/10), "units")
             self._pan_start = (event.x, event.y)
     
     def _end_pan(self, event):
@@ -700,6 +701,161 @@ class SPDEditorApp:
             logger.error(f"Error loading file: {e}")
             messagebox.showerror("Error", f"Failed to load file: {e}")
             self.status_text.set("Error loading file")
+            self.progress_var.set(0)
+    
+    def load_image(self, image_path):
+        """Load an image from the given path"""
+        if not os.path.exists(image_path):
+            raise FileNotFoundError(f"Image file not found: {image_path}")
+        
+        try:
+            # Make sure to handle it as an image, not an SPD file
+            self.image = cv2.imread(image_path)
+            if self.image is None:
+                raise ValueError(f"Could not read image: {image_path}")
+            
+            # Convert BGR to RGB for display
+            self.image = cv2.cvtColor(self.image, cv2.COLOR_BGR2RGB)
+            self.current_image_path = image_path
+            
+            # Update the display with the new image
+            self.update_display()
+            
+            # Update file info
+            self.file_path_var.set(os.path.basename(image_path))
+            if self.image is not None:
+                h, w = self.image.shape[:2]
+                self.dimensions_var.set(f"{w} × {h}")
+            
+            self.status_text.set(f"Loaded image: {os.path.basename(image_path)}")
+            print(f"Successfully loaded image: {image_path}")
+            return True
+        except Exception as e:
+            print(f"Error loading image: {e}")
+            messagebox.showerror("Error", f"Error loading image: {e}")
+            return False
+    
+    def auto_create_spd(self, input_path, output_path):
+        """Automatically create an SPD file from the input image path"""
+        try:
+            # Read the source image (if not already loaded)
+            if hasattr(self, 'image') and self.image is not None:
+                img = cv2.cvtColor(self.image, cv2.COLOR_RGB2BGR)  # Convert back to BGR for OpenCV
+            else:
+                img = cv2.imread(input_path)
+                if img is None:
+                    raise ValueError(f"Failed to read source image: {input_path}")
+            
+            self.status_text.set("Creating SPD file...")
+            self.progress_var.set(10)
+            
+            # Create SPD file
+            with SPDWriter(output_path) as writer:
+                # Add image section
+                height, width = img.shape[:2]
+                channels = 3 if len(img.shape) == 3 else 1
+                
+                # Create and write image section
+                img_section = ImageSection(
+                    width=width,
+                    height=height,
+                    channels=channels,
+                    format="BGR" if channels == 3 else "GRAY",
+                    data=img.tobytes()
+                )
+                writer.write_image_section(img_section)
+                self.status_text.set("Image section added...")
+                self.progress_var.set(30)
+                
+                # Extract landmarks if face detection is available
+                landmarks_added = False
+                if HAVE_FACE_DETECTION and HAVE_CV2:
+                    try:
+                        self.status_text.set("Detecting face...")
+                        # Initialize face detector with ONNX (more widely compatible)
+                        face_detector = FaceDetector(predict_type="ort")
+                        
+                        # Detect faces in the image
+                        faces = face_detector.detect(img)
+                        
+                        if faces and len(faces) > 0:
+                            self.status_text.set("Extracting landmarks...")
+                            self.progress_var.set(50)
+                            
+                            # Get the largest face (typically the most prominent)
+                            largest_face = face_detector.detect_largest_face(img)
+                            
+                            if largest_face is not None:
+                                try:
+                                    # Import our debug wrapper
+                                    from spd_editor.analysis.landmark_extractor_debug import DebugLandmarkExtractor
+                                    
+                                    # Initialize landmark extractor with debug wrapper
+                                    base_extractor = LandmarkExtractor(predict_type="ort")
+                                    landmark_extractor = DebugLandmarkExtractor(base_extractor)
+                                    
+                                    # Extract landmarks - adding explicit error handling
+                                    landmarks = landmark_extractor.extract_landmarks(img, largest_face)
+                                    
+                                    if landmarks is not None and len(landmarks) > 0:
+                                        # Determine the landmark type and dimensions
+                                        landmark_type = "face_landmarks"
+                                        dimensions = 2  # Most facial landmarks are 2D
+                                        
+                                        # Create landmarks section
+                                        landmarks_section = LandmarksSection(
+                                            count=len(landmarks),
+                                            dimensions=dimensions,
+                                            landmark_type=landmark_type,
+                                            points=landmarks.tolist()
+                                        )
+                                        
+                                        # Write landmarks section
+                                        writer.write_landmarks_section(landmarks_section)
+                                        self.status_text.set("Landmarks section added...")
+                                        self.progress_var.set(70)
+                                        landmarks_added = True
+                                    else:
+                                        logger.warning("No landmarks extracted from the face")
+                                except IndexError as e:
+                                    # Handle the specific "list index out of range" error
+                                    logger.error(f"Error in landmark extraction: {e}")
+                                    self.status_text.set("Failed to extract landmarks - creating SPD with image only")
+                                except Exception as e:
+                                    logger.error(f"Error in landmark extraction: {e}")
+                                    self.status_text.set("Failed to extract landmarks - creating SPD with image only")
+                            else:
+                                logger.warning("No largest face detected")
+                        else:
+                            logger.warning("No faces detected in the image")
+                    except Exception as e:
+                        logger.error(f"Error in face detection: {e}")
+                        self.status_text.set(f"Face detection error: {e} - creating SPD with image only")
+                
+                if not landmarks_added:
+                    logger.warning("Creating SPD file with image only (no landmarks)")
+                    self.status_text.set("Creating SPD file with image only (no landmarks)")
+                
+                # Finalize SPD file
+                writer.finalize()
+                self.status_text.set(f"SPD file created: {os.path.basename(output_path)}")
+                self.progress_var.set(100)
+                
+                # Show completion message
+                messagebox.showinfo("SPD Creation Complete", 
+                                  f"SPD file created successfully at {output_path}" +
+                                  ("" if landmarks_added else "\n\nNote: No facial landmarks were detected."))
+            
+            # Open the newly created file
+            self.load_file(output_path)
+            
+            print(f"Successfully created SPD file: {output_path}")
+            
+        except Exception as e:
+            error_msg = f"Error creating SPD file: {e}"
+            logger.error(error_msg)
+            messagebox.showerror("Error", error_msg)
+            self.status_text.set("Error creating SPD file")
             self.progress_var.set(0)
     
     def save_file(self, event=None):
@@ -1357,11 +1513,34 @@ An SPD (Source Portrait Descriptor) is a binary file format that stores pre-proc
 
 def main():
     """Main entry point for the GUI."""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description="SPD Editor GUI",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument('--input', help='Input image file to auto-load')
+    parser.add_argument('--output', help='Output SPD file to auto-create')
+    args = parser.parse_args()
+    
     if not TKINTER_AVAILABLE:
         logger.error("Tkinter is not available. The GUI cannot be started.")
         sys.exit(1)
     root = tk.Tk()
     app = SPDEditorApp(root)
+    
+    # Handle auto-loading and auto-creation if arguments are provided
+    if args.input:
+        # Make sure this explicitly loads as an image, not an SPD file
+        print(f"Auto-loading image from: {args.input}")
+        # Schedule auto-loading after GUI is initialized
+        root.after(100, lambda: app.load_image(args.input))
+        
+        # If output is also specified, auto-create the SPD file
+        if args.output:
+            print(f"Auto-creating SPD file: {args.output}")
+            # Use the new auto_create_spd method, with a slightly longer delay to ensure image loading is complete
+            root.after(1500, lambda: app.auto_create_spd(args.input, args.output))
+    
     root.mainloop()
 
 

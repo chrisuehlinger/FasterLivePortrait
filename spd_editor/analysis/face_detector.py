@@ -82,8 +82,8 @@ class FaceDetector:
                 if self.model_path is None:
                     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
                     model_paths = [
-                        os.path.join(base_dir, "checkpoints/liveportrait_onnx/retinaface_det_static.trt"),
-                        os.path.join(base_dir, "checkpoints/liveportrait_onnx/face_2dpose_106_static.trt")
+                        os.path.join(base_dir, "checkpoints/liveportrait_onnx/retinaface_det_static.onnx"),
+                        os.path.join(base_dir, "checkpoints/liveportrait_onnx/face_2dpose_106_static.onnx")
                     ]
                     
                     # Fall back to ONNX if TRT not available
@@ -215,6 +215,45 @@ class FaceDetector:
                 gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
                 
                 # Detect faces
+                faces = self.opencv_face_detector.detectMultiScale(
+                    gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+                
+                # Convert to standardized output format
+                results = []
+                for (x, y, w, h) in faces:
+                    # Create bounding box [x1, y1, x2, y2]
+                    bbox = np.array([x, y, x+w, y+h])
+                    
+                    # Extract landmarks if possible
+                    landmark = None
+                    if self.opencv_landmark_detector is not None:
+                        success, landmarks = self.opencv_landmark_detector.fit(gray, np.array([bbox]))
+                        if success:
+                            landmark = landmarks[0][0]
+                    
+                    results.append({
+                        'bbox': bbox,
+                        'confidence': 0.9,  # OpenCV doesn't provide confidence scores
+                        'landmark': landmark
+                    })
+                
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error in face detection: {e}")
+            return []
+    
+    def detect_largest_face(self, image: np.ndarray) -> Optional[Dict[str, Any]]:
+        """
+        Detect the largest face in an image.
+        
+        Args:
+            image: Input image in BGR format (OpenCV format)
+            
+        Returns:
+            Dictionary containing face detection result of largest face, or None if no faces detected
+        """
+        faces = self.detect(image)
         
         if not faces:
             return None

@@ -35,20 +35,10 @@ def main(args: Optional[List[str]] = None) -> int:
         print(f"SPD Editor v{__version__}")
         return 0
         
-    # Check if GUI mode is requested
+    # Add handling for GUI mode with input and output parameters
     if args[0] == "gui":
-        try:
-            from spd_editor.gui import main as gui_main
-            return gui_main()
-        except ImportError as e:
-            print(f"Error: Could not launch GUI. {e}")
-            print("Make sure you have the required dependencies installed:")
-            print("- tkinter (usually comes with Python)")
-            print("- Pillow (pip install pillow)")
-            print("- numpy (pip install numpy)")
-            print("- opencv-python (pip install opencv-python)")
-            print("- matplotlib (optional, for 3D visualization)")
-            return 1
+        from spd_editor.gui import main as gui_main
+        return gui_main()
         
     # Route all other commands to CLI
     return cli_main()
