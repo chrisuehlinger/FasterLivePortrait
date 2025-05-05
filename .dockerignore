@@ -18,3 +18,5 @@ results
 downloads/TensorRT-8.6.1.6/
 grid-sample3d-trt-plugin-src
 certs
+frontend/node_modules
+frontend/dist

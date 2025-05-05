@@ -3,7 +3,7 @@
 docker build . \
   -t uehreka/fasterliveportrait:latest
 
-docker system prune -f
+# docker system prune -f
 
 xhost +local:root
 docker run -it --gpus=all \
@@ -20,13 +20,3 @@ docker run -it --gpus=all \
   uehreka/fasterliveportrait:latest
 
 sudo chown -R $USER:$USER checkpoints results
-
-
-
-docker run -it --gpus=all \
-  --rm \
-  --privileged \
-  --net=host \
-  -v "$(pwd)/checkpoints:/root/FasterLivePortrait/checkpoints" \
-  -v "$(pwd)/certs:/root/FasterLivePortrait/certs" \
-  uehreka/fasterliveportrait:latest

@@ -419,8 +419,11 @@ class FasterLivePortraitPipeline:
                 if self.is_source_video:
                     x_d_exp_smooth = self.exp_smooth.process(x_d_exp_smooth)
                 if self.cfg.infer_params.animation_region in ["all", "exp"]:
-                    for idx in [1, 2, 6, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]:
-                        delta_new[:, idx, :] = x_d_exp_smooth[:, idx, :] if self.is_source_video else x_d_i_info['exp'][
+                    for idx in [1, 2,  11, 13, 15, 16, 18]:
+                        delta_new[:, idx, :] = x_d_exp_smooth[:, idx, :] if self.is_source_video else 2*x_d_i_info['exp'][
+                                                                                                      :, idx, :]
+                    for idx in [6, 12, 14, 17, 19, 20]:
+                        delta_new[:, idx, :] = x_d_exp_smooth[:, idx, :] if self.is_source_video else 3*x_d_i_info['exp'][
                                                                                                       :, idx, :]
                     delta_new[:, 3:5, 1] = x_d_exp_smooth[:, 3:5, 1] if self.is_source_video else x_d_i_info['exp'][:,
                                                                                                   3:5, 1]
@@ -506,16 +509,16 @@ class FasterLivePortraitPipeline:
         I_p_pstbk = torch.from_numpy(img_src).to(self.device).float()
         realtime = kwargs.get("realtime", False)
         if self.cfg.infer_params.flag_crop_driving_video:
-            if self.src_lmk_pre is None:
-                src_face = self.model_dict["face_analysis"].predict(img_bgr)
-                if len(src_face) == 0:
-                    return None, None, None, None
-                lmk = src_face[0]
-                lmk = self.model_dict["landmark"].predict(img_rgb, lmk)
-                self.src_lmk_pre = lmk.copy()
-            else:
-                lmk = self.model_dict["landmark"].predict(img_rgb, self.src_lmk_pre)
-                self.src_lmk_pre = lmk.copy()
+            # if self.src_lmk_pre is None:
+            src_face = self.model_dict["face_analysis"].predict(img_bgr)
+            if len(src_face) == 0:
+                return None, None, None, None
+            lmk = src_face[0]
+            lmk = self.model_dict["landmark"].predict(img_rgb, lmk)
+            self.src_lmk_pre = lmk.copy()
+            # else:
+            #     lmk = self.model_dict["landmark"].predict(img_rgb, self.src_lmk_pre)
+            #     self.src_lmk_pre = lmk.copy()
 
             ret_bbox = parse_bbox_from_landmark(
                 lmk,
