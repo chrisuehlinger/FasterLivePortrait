@@ -6,6 +6,7 @@ matplotlib>=3.5.0
 torch>=1.10.0
 scipy>=1.7.0
 tqdm>=4.60.0
+omegaconf
 
 # NOTE: For Docker, the following system packages are required:
 # - python3-tk (for tkinter GUI)

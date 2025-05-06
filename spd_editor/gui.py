@@ -59,6 +59,14 @@ except ImportError:
     ImageTk = DummyTk()
     logger.warning("OpenCV or PIL not available. Image processing will be disabled.")
 
+# Import OmegaConf for YAML configuration
+try:
+    from omegaconf import OmegaConf
+    HAVE_OMEGACONF = True
+except ImportError:
+    HAVE_OMEGACONF = False
+    logger.warning("OmegaConf not available. Default parameters will be used for analysis modules.")
+
 # Import SPD modules
 from spd_editor.spd.reader import SPDReader, SPDError, SPDSectionError
 from spd_editor.spd.writer import SPDWriter
@@ -131,6 +139,23 @@ class SPDEditorApp:
         self.show_landmarks = tk.BooleanVar(value=True)
         self.show_labels = tk.BooleanVar(value=False)
         self._pan_start = None
+
+        # Load pipeline configuration
+        self.pipeline_cfg = None
+        self.crop_params = {}
+        self.infer_params = {}
+        if HAVE_OMEGACONF:
+            try:
+                config_path = os.path.join(project_root, "configs", "trt_infer.yaml")
+                if os.path.exists(config_path):
+                    self.pipeline_cfg = OmegaConf.load(config_path)
+                    self.crop_params = self.pipeline_cfg.get('crop_params', {})
+                    self.infer_params = self.pipeline_cfg.get('infer_params', {})
+                    logger.info(f"Loaded configuration from {config_path}")
+                else:
+                    logger.warning(f"Configuration file not found: {config_path}. Using defaults.")
+            except Exception as e:
+                logger.error(f"Error loading trt_infer.yaml: {e}. Using defaults.")
         
         # Create the UI
         self._create_menu()
@@ -747,6 +772,7 @@ class SPDEditorApp:
         # Open file dialog to select source image
         image_path = filedialog.askopenfilename(
             title="Select Source Image",
+            initialdir="/root/FasterLivePortrait/spd_editor/data",
             filetypes=[
                 ("Image Files", "*.jpg *.jpeg *.png *.bmp"),
                 ("All Files", "*.*")
@@ -801,27 +827,31 @@ class SPDEditorApp:
                         if HAVE_FACE_DETECTION and HAVE_CV2:
                             try:
                                 self.root.after(0, lambda: self.status_text.set("Detecting face..."))
-                                # Initialize face detector with ONNX (more widely compatible)
-                                face_detector = FaceDetector(predict_type="ort")
                                 
-                                # Detect faces in the image
-                                faces = face_detector.detect(img)
+                                current_predict_type = self.infer_params.get('predict_type', 'ort')
+                                logger.info(f"Using predict_type: {current_predict_type} for FaceDetector")
+
+                                face_detector = FaceDetector(predict_type=current_predict_type)
                                 
-                                if faces:
+                                # Detect the largest face in the image
+                                largest_face = face_detector.detect_largest_face(img)
+                                
+                                if largest_face:
                                     self.root.after(0, lambda: self.status_text.set("Extracting landmarks..."))
                                     self.root.after(0, lambda: self.progress_var.set(50))
                                     
-                                    # Get the largest face (typically the most prominent)
-                                    largest_face = face_detector.detect_largest_face(img)
+                                    logger.info(f"Using predict_type: {current_predict_type} for LandmarkExtractor")
+                                    logger.info(f"Using crop_params for LandmarkExtractor: {self.crop_params}")
+                                    # Initialize landmark extractor
+                                    landmark_extractor = LandmarkExtractor(
+                                        predict_type=current_predict_type,
+                                        crop_params=self.crop_params
+                                    )
                                     
-                                    if largest_face:
-                                        # Initialize landmark extractor
-                                        landmark_extractor = LandmarkExtractor(predict_type="ort")
+                                    # Extract landmarks using the largest_face dictionary
+                                    landmarks = landmark_extractor.extract_landmarks(img, largest_face)
                                         
-                                        # Extract landmarks
-                                        landmarks = landmark_extractor.extract_landmarks(img, largest_face)
-                                        
-                                        if landmarks is not None and len(landmarks) > 0:
+                                    if landmarks is not None and len(landmarks) > 0:
                                             # Determine the landmark type and dimensions
                                             landmark_type = "face_landmarks"
                                             dimensions = 2  # Most facial landmarks are 2D

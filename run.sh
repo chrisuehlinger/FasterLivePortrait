@@ -16,6 +16,7 @@ docker run -it --gpus=all \
   -v "$(pwd)/checkpoints:/root/FasterLivePortrait/checkpoints" \
   -v "$(pwd)/results:/root/FasterLivePortrait/results" \
   -v "$(pwd)/certs:/root/FasterLivePortrait/certs" \
+  -v "$(pwd)/spd_editor/data:/root/FasterLivePortrait/spd_editor/data" \
   -v "$(pwd)/frontend:/root/FasterLivePortrait/frontend" \
   uehreka/fasterliveportrait:latest
 

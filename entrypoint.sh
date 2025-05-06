@@ -25,12 +25,14 @@ export LD_LIBRARY_PATH=/usr/local/tensorrt/lib:$LD_LIBRARY_PATH
 #  --dri_video assets/examples/driving/d14.mp4 \
 #  --cfg configs/trt_infer.yaml
 
-python websocket_server.py \
-  --port 8080 \
-  --host 0.0.0.0 \
-  --config-path configs/trt_infer.yaml \
-  --source-image assets/examples/source/ahau-kin.png \
-  --source-image-2 assets/examples/source/ix-chel.png \
-  --source-image-3 assets/examples/source/chac-bolay.png \
-  --ssl-cert certs/cert.pem \
-  --ssl-key certs/key.pem
+python spd_editor/gui.py
+
+# python websocket_server.py \
+#   --port 8080 \
+#   --host 0.0.0.0 \
+#   --config-path configs/trt_infer.yaml \
+#   --source-image assets/examples/source/ahau-kin.png \
+#   --source-image-2 assets/examples/source/ix-chel.png \
+#   --source-image-3 assets/examples/source/chac-bolay.png \
+#   --ssl-cert certs/cert.pem \
+#   --ssl-key certs/key.pem

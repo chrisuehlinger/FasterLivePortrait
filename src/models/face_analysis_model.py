@@ -14,6 +14,8 @@ from ..utils import face_align
 import torch
 from torch.cuda import nvtx
 from .predictor import numpy_to_torch_dtype_dict
+from src.models.landmark_model import LandmarkModel
+from src.data_process.face_process import Face
 
 
 def sort_by_direction(faces, direction: str = 'large-small', face_center=None):
@@ -306,21 +308,55 @@ class FaceAnalysisModel:
         face["landmark"] = pred
         return pred
 
-    def predict(self, *data, **kwargs):
-        bboxes, kpss = self.detect_face(*data)
-        if bboxes.shape[0] == 0:
+    def predict(self, image: np.ndarray, **kwargs):
+        """Detect faces and landmarks in an image.
+
+        Args:
+            image (np.ndarray): Input image, expected to be BGR by convention from cv2.imread.
+                                This method will convert it to RGB for internal models.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            List[np.ndarray]: A list of landmark arrays (106 points) for each detected face,
+                              in original image coordinates. Returns None for faces that couldn't be processed.
+        """
+        if image is None:
             return []
-        ret = []
-        for i in range(bboxes.shape[0]):
-            bbox = bboxes[i, 0:4]
-            det_score = bboxes[i, 4]
-            kps = kpss[i]
-            face = Face(bbox=bbox, kps=kps, det_score=det_score)
-            self.estimate_face_pose(data[0], face)
-            ret.append(face)
-        ret = sort_by_direction(ret, 'large-small', None)
-        outs = [x.landmark for x in ret]
-        return outs
+
+        # Ensure image is RGB for internal models that expect it (e.g., landmark model)
+        if len(image.shape) == 3 and image.shape[2] == 3:  # BGR or RGB
+            img_rgb_internal = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        elif len(image.shape) == 2:  # Grayscale image
+            img_rgb_internal = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        else:
+            img_rgb_internal = image
+
+        # Call the detector. Expected to return List[Face]
+        detected_items = self.detect_face(image)
+
+        self.face_objects = []  # Store valid Face objects that were processed
+        lmk_lst = []
+
+        if detected_items:
+            for i, item in enumerate(detected_items):
+                # Ensure the item is an instance of the Face dataclass
+                if not isinstance(item, Face):
+                    lmk_lst.append(None)
+                    continue
+
+                # At this point, item is a Face object
+                current_face_obj = item
+                # Add to self.face_objects so downstream users like spd_editor.FaceDetector can access it
+                self.face_objects.append(current_face_obj)
+
+                if current_face_obj.kps is not None:
+                    # Pass RGB image to the landmark model
+                    face_landmark_res = self.estimate_face_pose(img_rgb_internal, current_face_obj)
+                    current_face_obj.landmark = face_landmark_res  # Store refined landmarks back into the Face object
+                    lmk_lst.append(face_landmark_res)
+                else:
+                    lmk_lst.append(None)  # No initial keypoints to refine
+        return lmk_lst
 
     def __del__(self):
         del self.face_det

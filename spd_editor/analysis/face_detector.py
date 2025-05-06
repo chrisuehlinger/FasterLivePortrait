@@ -82,8 +82,8 @@ class FaceDetector:
                 if self.model_path is None:
                     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
                     model_paths = [
-                        os.path.join(base_dir, "checkpoints/liveportrait_onnx/retinaface_det_static.trt"),
-                        os.path.join(base_dir, "checkpoints/liveportrait_onnx/face_2dpose_106_static.trt")
+                        os.path.join(base_dir, "checkpoints/liveportrait_onnx/retinaface_det_static.onnx"),
+                        os.path.join(base_dir, "checkpoints/liveportrait_onnx/face_2dpose_106_static.onnx")
                     ]
                     
                     # Fall back to ONNX if TRT not available
@@ -162,6 +162,8 @@ class FaceDetector:
         if not self.initialized:
             logger.error("Face detector not initialized")
             return []
+
+        results: List[Dict[str, Any]] = []
             
         try:
             # Ensure image is BGR (OpenCV format)
@@ -172,55 +174,106 @@ class FaceDetector:
                 
             if self.model_type == "face_analysis_model":
                 # Detect faces using the FasterLivePortrait model
-                landmarks_list = self.model.predict(image)
+                landmarks_list_internal = self.model.predict(image)
                 
                 # Store face objects for testing purposes
                 if hasattr(self.model, 'face_objects'):
                     self.face_objects = self.model.face_objects
                 
-                # Convert to standardized output format
-                results = []
-                if not landmarks_list:
-                    return results
-                    
-                # Access internal face data from the model to get bounding boxes
-                for i, landmark in enumerate(landmarks_list):
-                    # Try to get the underlying Face object that has bbox and confidence
-                    if hasattr(self.model, 'face_objects') and len(self.model.face_objects) > i:
-                        face_obj = self.model.face_objects[i]
-                        bbox = face_obj.bbox
-                        confidence = face_obj.det_score
-                    else:
-                        # If we don't have direct access to the Face objects,
-                        # estimate a bounding box from landmarks
-                        if landmark is not None and len(landmark) > 0:
-                            x1 = np.min(landmark[:, 0])
-                            y1 = np.min(landmark[:, 1])
-                            x2 = np.max(landmark[:, 0])
-                            y2 = np.max(landmark[:, 1])
-                            bbox = np.array([x1, y1, x2, y2])
-                            confidence = 1.0  # No confidence available
+                if landmarks_list_internal: # Only proceed if faces were detected
+                    for i, landmark_points in enumerate(landmarks_list_internal):
+                        # Try to get the underlying Face object that has bbox and confidence
+                        if hasattr(self.model, 'face_objects') and self.model.face_objects and i < len(self.model.face_objects):
+                            face_obj = self.model.face_objects[i]
+                            bbox = face_obj.bbox
+                            confidence = face_obj.det_score
                         else:
-                            continue
-                            
-                    results.append({
-                        'bbox': bbox,
-                        'confidence': confidence,
-                        'landmark': landmark
-                    })
+                            # If we don't have direct access to the Face objects,
+                            # estimate a bounding box from landmarks
+                            if landmark_points is not None and len(landmark_points) > 0:
+                                x1 = np.min(landmark_points[:, 0])
+                                y1 = np.min(landmark_points[:, 1])
+                                x2 = np.max(landmark_points[:, 0])
+                                y2 = np.max(landmark_points[:, 1])
+                                bbox = np.array([x1, y1, x2, y2])
+                                confidence = 1.0  # No confidence available
+                            else:
+                                continue # Skip if landmark_points is None or empty
+                                
+                        results.append({
+                            'bbox': bbox,
+                            'confidence': confidence,
+                            'landmark': landmark_points
+                        })
                 
             elif self.model_type == "opencv":
                 # Detect faces using OpenCV
-                # Convert to grayscale for detection
                 gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-                
-                # Detect faces
+                face_rects_cv = self.opencv_face_detector.detectMultiScale(
+                    gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
+                )
+
+                for (x, y, w, h) in face_rects_cv:
+                    bbox = np.array([x, y, x + w, y + h])
+                    landmark_points_cv = None
+                    if self.opencv_landmark_detector:
+                        # OpenCV landmark detector expects a list of rects
+                        # The fit method expects rects as list of tuples/np.arrays [(x,y,w,h), ...]
+                        face_roi_for_lmk = np.array([[x, y, w, h]], dtype=np.int32)
+                        try:
+                            ok, landmarks_fit = self.opencv_landmark_detector.fit(gray, face_roi_for_lmk)
+                            if ok and landmarks_fit is not None and len(landmarks_fit) > 0:
+                                landmark_points_cv = landmarks_fit[0][0] # Get landmarks for the current face
+                        except cv2.error as e:
+                            logger.warning(f"OpenCV landmark fitting failed: {e}")
+
+
+                    results.append({
+                        'bbox': bbox,
+                        'confidence': 1.0,  # Cascade classifiers don't give confidence directly
+                        'landmark': landmark_points_cv # This might be None
+                    })
+            return results
+        except Exception as e:
+            logger.error(f"Error during face detection: {e}")
+            return [] # Return empty list on error
+
+    def detect_largest_face(self, image: np.ndarray) -> Optional[Dict[str, Any]]:
+        """
+        Detects all faces in an image and returns the largest one.
+        
+        Args:
+            image: Input image in BGR format (OpenCV format).
+            
+        Returns:
+            A dictionary containing the largest face's detection results (bbox, confidence, landmark),
+            or None if no faces are detected.
+        """
+        faces = self.detect(image)
         
         if not faces:
             return None
             
+        # Filter for faces that have a valid bounding box for area calculation
+        valid_faces = []
+        for f in faces:
+            if 'bbox' in f and f['bbox'] is not None and len(f['bbox']) == 4:
+                # Ensure bbox elements are numbers for area calculation
+                try:
+                    # Check if width and height are positive
+                    width = float(f['bbox'][2]) - float(f['bbox'][0])
+                    height = float(f['bbox'][3]) - float(f['bbox'][1])
+                    if width > 0 and height > 0:
+                        valid_faces.append(f)
+                except (TypeError, ValueError):
+                    logger.warning(f"Invalid bbox format for area calculation: {f['bbox']}")
+                    continue
+        
+        if not valid_faces:
+            return None
+            
         # Find the face with the largest area
-        largest_face = max(faces, key=lambda face: 
+        largest_face = max(valid_faces, key=lambda face: 
                           (face['bbox'][2] - face['bbox'][0]) * 
                           (face['bbox'][3] - face['bbox'][1]))
                           

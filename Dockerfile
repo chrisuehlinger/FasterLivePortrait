@@ -1,6 +1,15 @@
 FROM uehreka/flp-base:latest
 
-RUN mkdir /root/FasterLivePortrait
+USER root
+RUN apt-get update && \
+    apt-get install -y python3-tk libgl1-mesa-glx && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /root/FasterLivePortrait/spd_editor
+COPY ./spd_editor/requirements.txt /root/FasterLivePortrait/spd_editor/requirements.txt
+WORKDIR /root/FasterLivePortrait/spd_editor
+RUN pip install -r requirements.txt
+
 COPY ./requirements.txt /root/FasterLivePortrait/requirements.txt
 WORKDIR /root/FasterLivePortrait
 

@@ -48,6 +48,7 @@ class LandmarkExtractor:
                  model_path: Optional[str] = None, 
                  predict_type: str = "trt",
                  landmark_type: str = "2d",
+                 crop_params: Optional[Dict[str, Any]] = None,
                  **kwargs):
         """
         Initialize the landmark extractor.
@@ -57,10 +58,12 @@ class LandmarkExtractor:
                 If None, uses the default model path.
             predict_type: Type of prediction to use ('trt' for TensorRT, 'ort' for ONNX Runtime).
             landmark_type: Type of landmarks to extract ('2d' or '3d').
+            crop_params: Dictionary of cropping parameters.
         """
         self.model_path = model_path
         self.predict_type = predict_type
         self.landmark_type = landmark_type
+        self.crop_params = crop_params if crop_params is not None else {}
         self.model = None
         self.landmark_model = None
         self.mediapipe_model = None
@@ -121,6 +124,7 @@ class LandmarkExtractor:
                     model_kwargs = {
                         "predict_type": self.predict_type,
                         "model_path": model_path,
+                        "crop_params": self.crop_params, # Pass crop_params here
                     }
                     
                     try:
@@ -162,7 +166,7 @@ class LandmarkExtractor:
         Extract facial landmarks from an image.
         
         Args:
-            image: Input image (RGB format if using MediaPipe, BGR if using LandmarkModel)
+            image: Input image (assumed BGR from cv2.imread)
             face_detection: Face detection result or pre-computed landmarks
                 If dict, expected to have 'bbox' key with [x1, y1, x2, y2]
                 If ndarray, expected to be initial landmarks for tracking
@@ -195,36 +199,42 @@ class LandmarkExtractor:
             
             # Extract landmarks based on the available model
             if self.model == "landmark_model":
+                # Ensure image is RGB for LandmarkModel
+                if len(image.shape) == 3 and image.shape[2] == 3:
+                    img_rgb_for_lmk_model = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                elif len(image.shape) == 2: # Grayscale
+                    img_rgb_for_lmk_model = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+                else:
+                    img_rgb_for_lmk_model = image # Assume already suitable
+
                 # If we have a LandmarkModel
                 if initial_landmarks is not None:
                     # For tracking/refinement, use the initial landmarks
-                    landmarks = self.landmark_model.predict(image, initial_landmarks)
+                    landmarks = self.landmark_model.predict(img_rgb_for_lmk_model, initial_landmarks)
                 else:
-                    # No initial landmarks, need to detect first
-                    try:
-                        from src.models.face_analysis_model import FaceAnalysisModel
-                        
-                        # Use FaceAnalysisModel for one-off detection
-                        temp_detector = FaceAnalysisModel(
-                            predict_type=self.predict_type,
-                            model_path=[self.model_path]
-                        )
-                        faces = temp_detector.predict(image)
-                        if not faces:
-                            return None
-                        landmarks = faces[0]  # Take the first face
-                    except ImportError:
-                        logger.error("FaceAnalysisModel not available for landmark detection")
-                        return None
-                
+                    # No initial landmarks, need to detect first (this path might be less common for spd_editor)
+                    # This part might need FaceAnalysisModel which itself handles BGR->RGB
+                    # For simplicity, assuming initial_landmarks are usually provided from FaceDetector
+                    # which should now provide good landmarks due to its own BGR->RGB fix.
+                    # If this path is taken, ensure FaceAnalysisModel is used correctly.
+                    logger.warning("LandmarkExtractor called without initial_landmarks for LandmarkModel; "
+                                   "this scenario might require FaceAnalysisModel for initial detection.")
+                    # Fallback or error if direct prediction on full image without initial lmk is not desired
+                    # For now, let's assume initial_landmarks are typically provided.
+                    # If not, the behavior of self.landmark_model.predict(img_rgb_for_lmk_model)
+                    # (i.e. LandmarkModel.input_process with only one arg) will do a simple resize.
+                    landmarks = self.landmark_model.predict(img_rgb_for_lmk_model)
+
                 return landmarks
                 
             elif self.model == "mediapipe" and self.mediapipe_available:
                 # If we're using MediaPipe as fallback
-                # Convert to RGB for MediaPipe
-                if image.shape[2] == 3:
+                # Convert to RGB for MediaPipe (already handled if image was BGR)
+                if len(image.shape) == 3 and image.shape[2] == 3: # BGR
                     rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-                else:
+                elif len(image.shape) == 2: # GRAY
+                    rgb_image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+                else: # Already RGB or other
                     rgb_image = image
                 
                 # Process the image to find face landmarks
