@@ -27,6 +27,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger("spd_editor.gui")
 
+# Diagnostic check for common import issue cause
+# This check is added to help diagnose the "No module named src.data_process" error.
+# It verifies if the __init__.py file exists, which is necessary for 'data_process' to be a package.
+expected_init_py_path = os.path.join(project_root, "src", "data_process", "__init__.py")
+if not os.path.exists(expected_init_py_path):
+    logger.warning(
+        f"DIAGNOSTIC: The file '{expected_init_py_path}' was not found. "
+        f"This is a likely cause for 'No module named src.data_process' errors. "
+        f"Please ensure 'src/data_process/' is a Python package by creating an empty __init__.py file in it."
+    )
+
 # Check if tkinter is available
 TKINTER_AVAILABLE = False
 try:
@@ -834,34 +845,31 @@ class SPDEditorApp:
                                 face_detector = FaceDetector(predict_type=current_predict_type)
                                 
                                 # Detect the largest face in the image
+                                # largest_face is a dict: {'bbox': ..., 'kps': ..., 'landmark': np.array(106,2), ...}
+                                # The 'landmark' key contains the 106 points from FaceAnalysisModel
                                 largest_face = face_detector.detect_largest_face(img)
                                 
-                                if largest_face:
-                                    self.root.after(0, lambda: self.status_text.set("Extracting landmarks..."))
-                                    self.root.after(0, lambda: self.progress_var.set(50))
+                                if largest_face and largest_face.get('landmark') is not None:
+                                    self.root.after(0, lambda: self.status_text.set("Landmarks obtained from FaceDetector."))
+                                    self.root.after(0, lambda: self.progress_var.set(60)) # Adjusted progress
                                     
-                                    logger.info(f"Using predict_type: {current_predict_type} for LandmarkExtractor")
-                                    logger.info(f"Using crop_params for LandmarkExtractor: {self.crop_params}")
-                                    # Initialize landmark extractor
-                                    landmark_extractor = LandmarkExtractor(
-                                        predict_type=current_predict_type,
-                                        crop_params=self.crop_params
-                                    )
-                                    
-                                    # Extract landmarks using the largest_face dictionary
-                                    landmarks = landmark_extractor.extract_landmarks(img, largest_face)
+                                    landmarks_np = largest_face['landmark'] # Use landmarks directly from FaceDetector
                                         
-                                    if landmarks is not None and len(landmarks) > 0:
+                                    if landmarks_np is not None and len(landmarks_np) > 0:
                                             # Determine the landmark type and dimensions
-                                            landmark_type = "face_landmarks"
-                                            dimensions = 2  # Most facial landmarks are 2D
+                                            # Using a more specific type name if these are always 106 2D landmarks
+                                            landmark_type = "face_landmarks_106" 
+                                            dimensions = 2  # Assuming 2D landmarks
+                                            
+                                            if landmarks_np.ndim == 2 and landmarks_np.shape[1] == 3: # Check if 3D
+                                                dimensions = 3
                                             
                                             # Create landmarks section
                                             landmarks_section = LandmarksSection(
-                                                count=len(landmarks),
+                                                count=len(landmarks_np),
                                                 dimensions=dimensions,
                                                 landmark_type=landmark_type,
-                                                points=landmarks.tolist()
+                                                points=landmarks_np.tolist()
                                             )
                                             
                                             # Write landmarks section
@@ -869,9 +877,15 @@ class SPDEditorApp:
                                             self.root.after(0, lambda: self.status_text.set("Landmarks section added..."))
                                             self.root.after(0, lambda: self.progress_var.set(70))
                                             landmarks_added = True
+                                    else:
+                                        logger.info("FaceDetector returned landmarks, but they are empty or None.")
+                                        self.root.after(0, lambda: self.status_text.set("Empty landmarks from FaceDetector."))
+                                else:
+                                    logger.info("No face detected or landmarks not found by FaceDetector.")
+                                    self.root.after(0, lambda: self.status_text.set("No landmarks found by FaceDetector."))
                             except Exception as e:
-                                logger.error(f"Error extracting landmarks: {e}")
-                                self.root.after(0, lambda: self.status_text.set(f"Error extracting landmarks: {e}"))
+                                logger.error(f"Error during face detection or landmark processing: {e}", exc_info=True)
+                                self.root.after(0, lambda: self.status_text.set(f"Error in face/landmark processing: {e}"))
                         
                         if not landmarks_added:
                             self.root.after(0, lambda: self.status_text.set("No landmarks detected or face detection unavailable"))

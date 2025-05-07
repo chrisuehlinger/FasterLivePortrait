@@ -15,7 +15,6 @@ import torch
 from torch.cuda import nvtx
 from .predictor import numpy_to_torch_dtype_dict
 from src.models.landmark_model import LandmarkModel
-from src.data_process.face_process import Face
 
 
 def sort_by_direction(faces, direction: str = 'large-small', face_center=None):
@@ -313,7 +312,6 @@ class FaceAnalysisModel:
 
         Args:
             image (np.ndarray): Input image, expected to be BGR by convention from cv2.imread.
-                                This method will convert it to RGB for internal models.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -324,38 +322,48 @@ class FaceAnalysisModel:
             return []
 
         # Ensure image is RGB for internal models that expect it (e.g., landmark model)
-        if len(image.shape) == 3 and image.shape[2] == 3:  # BGR or RGB
-            img_rgb_internal = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        elif len(image.shape) == 2:  # Grayscale image
-            img_rgb_internal = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
-        else:
-            img_rgb_internal = image
+        # The estimate_face_pose method expects RGB if it's doing color-sensitive processing,
+        # but detect_face handles its own BGR to RGB conversion if needed for its internal model.
+        # For consistency, we can pass the original BGR image to detect_face,
+        # and the RGB converted image to estimate_face_pose.
+        img_bgr_original = image  # Keep original BGR for detect_face as it handles its own conversion
 
-        # Call the detector. Expected to return List[Face]
-        detected_items = self.detect_face(image)
+        if len(image.shape) == 3 and image.shape[2] == 3:  # BGR or RGB
+            img_rgb_for_pose = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        elif len(image.shape) == 2:  # Grayscale image
+            img_rgb_for_pose = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        else:  # Already RGB or some other format, assume user knows best for pose model
+            img_rgb_for_pose = image
+
+        # Call the detector. It returns (det, kpss)
+        # det: bounding boxes and scores
+        # kpss: keypoints from detector (can be None)
+        det, kpss = self.detect_face(img_bgr_original)
 
         self.face_objects = []  # Store valid Face objects that were processed
         lmk_lst = []
 
-        if detected_items:
-            for i, item in enumerate(detected_items):
-                # Ensure the item is an instance of the Face dataclass
-                if not isinstance(item, Face):
-                    lmk_lst.append(None)
-                    continue
+        if det is not None and det.shape[0] > 0:
+            for i in range(det.shape[0]):
+                bbox = det[i, :4]
+                det_score = det[i, 4]
 
-                # At this point, item is a Face object
-                current_face_obj = item
-                # Add to self.face_objects so downstream users like spd_editor.FaceDetector can access it
+                current_kps_from_detector = None
+                if kpss is not None and i < kpss.shape[0]:
+                    current_kps_from_detector = kpss[i]
+
+                # Create an insightface.app.common.Face object
+                # The 'landmark' field in the Face object will be populated by estimate_face_pose
+                current_face_obj = Face(bbox=bbox, kps=current_kps_from_detector, det_score=det_score)
                 self.face_objects.append(current_face_obj)
 
-                if current_face_obj.kps is not None:
-                    # Pass RGB image to the landmark model
-                    face_landmark_res = self.estimate_face_pose(img_rgb_internal, current_face_obj)
-                    current_face_obj.landmark = face_landmark_res  # Store refined landmarks back into the Face object
-                    lmk_lst.append(face_landmark_res)
-                else:
-                    lmk_lst.append(None)  # No initial keypoints to refine
+                # Estimate refined landmarks (106 points) using the face_pose model
+                # estimate_face_pose expects the Face object to have bbox set.
+                # It internally uses kps if available for alignment, but primarily bbox.
+                # It modifies current_face_obj by setting current_face_obj.landmark
+                refined_landmarks = self.estimate_face_pose(img_rgb_for_pose, current_face_obj)
+                lmk_lst.append(refined_landmarks)
+
         return lmk_lst
 
     def __del__(self):
