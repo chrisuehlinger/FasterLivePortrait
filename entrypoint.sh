@@ -32,6 +32,6 @@ python websocket_server.py \
   --source-image assets/examples/source/ahau-kin.png \
   --source-image-2 assets/examples/source/ix-chel.png \
   --source-image-3 assets/examples/source/chac-bolay.png \
-  --source-image-3 assets/examples/source/ahau-kin.png \
+  --source-image-4 assets/examples/source/ahau-kin.png \
   --ssl-cert certs/cert.pem \
   --ssl-key certs/key.pem
