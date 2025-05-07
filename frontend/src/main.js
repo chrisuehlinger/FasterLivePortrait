@@ -43,9 +43,10 @@ const textureLoader = new THREE.TextureLoader();
 
 // Background images corresponding to each source
 const backgroundTextures = [
-    '/frontend/images/ahau-kin-bg.png',  // Placeholder paths - update these later
+    '/frontend/images/ahau-kin-bg.png',
     '/frontend/images/ix-chel-bg.png',
-    '/frontend/images/chac-bolay-bg.png'
+    '/frontend/images/chac-bolay-bg.png',
+    '/frontend/images/ahau-kin-bg.png',
 ].map(path => {
     return textureLoader.load(path, (texture) => {
         texture.minFilter = THREE.LinearFilter;
@@ -55,7 +56,8 @@ const backgroundTextures = [
 const keyColors = [
     new THREE.Color('yellow'),  // Placeholder paths - update these later
     new THREE.Color('blue'),
-    new THREE.Color('red')
+    new THREE.Color('red'),
+    new THREE.Color('black')
 ];
 const keyLuminosities = keyColors.map(color => {
     const luminance = 0.299 * color.r + 0.587 * color.g + 0.114 * color.b;
@@ -65,15 +67,17 @@ const keyLuminosities = keyColors.map(color => {
 const characterScales = [
     0.85,  
     0.5,
-    0.5
+    0.5,
+    0.1,  
 ];
 const characterTopOffsets = [
     1,  
+    0.75,
     0.5,
-    0.5
+    0,
 ];
 
-let currentBackgroundIndex = 0;
+let currentBackgroundIndex = 3;
 
 // Initialize Three.js scene
 function initThreeJS() {

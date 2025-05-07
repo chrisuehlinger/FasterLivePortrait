@@ -380,7 +380,7 @@ class BaseVideoProcessor:
 
 # FasterLivePortrait video processor
 class FasterLivePortraitProcessor(BaseVideoProcessor):
-    def __init__(self, config_path, src_image_path, src_image_2_path=None, src_image_3_path=None, is_animal=False, debug=False):
+    def __init__(self, config_path, src_image_path, src_image_2_path=None, src_image_3_path=None, src_image_4_path=None, is_animal=False, debug=False):
         """Initialize the processor with source images and config"""
         super().__init__()
         
@@ -396,6 +396,8 @@ class FasterLivePortraitProcessor(BaseVideoProcessor):
             self.src_image_paths.append(src_image_2_path)
         if src_image_3_path:
             self.src_image_paths.append(src_image_3_path)
+        if src_image_4_path:
+            self.src_image_paths.append(src_image_4_path)
             
         self.current_source_index = 0
         self.src_images = []
@@ -707,6 +709,12 @@ class Server:
             elif config.source_image_3:
                 logger.warning(f"Source image 3 not found: {config.source_image_3}")
                 
+            if config.source_image_4 and os.path.isfile(config.source_image_4):
+                source_images.append(config.source_image_4)
+                logger.info(f"Found additional source image 4: {config.source_image_4}")
+            elif config.source_image_4:
+                logger.warning(f"Source image 4 not found: {config.source_image_4}")
+                
             logger.info(f"Initializing FasterLivePortrait with {len(source_images)} source images")
             logger.info(f"Config: {config.config_path}")
             logger.info(f"Is animal model: {config.is_animal}")
@@ -736,6 +744,7 @@ class Server:
                     src_image_path=config.source_image,
                     src_image_2_path=config.source_image_2 if config.source_image_2 and os.path.isfile(config.source_image_2) else None,
                     src_image_3_path=config.source_image_3 if config.source_image_3 and os.path.isfile(config.source_image_3) else None,
+                    src_image_4_path=config.source_image_4 if config.source_image_4 and os.path.isfile(config.source_image_4) else None,
                     is_animal=config.is_animal,
                     debug=config.debug,
                 )
@@ -949,6 +958,7 @@ def main():
     parser.add_argument("--source-image", default="assets/examples/source/s2.jpg", help="Path to primary source image to animate")
     parser.add_argument("--source-image-2", help="Path to second source image to animate")
     parser.add_argument("--source-image-3", help="Path to third source image to animate")
+    parser.add_argument("--source-image-4", help="Path to fourth source image to animate")
     parser.add_argument("--debug", action="store_true", help="Show Debug stats")
     parser.add_argument("--is-animal", action="store_true", help="Use animal model")
     parser.add_argument("--use-basic-processor", action="store_true", help="Use basic OpenCV processor instead of FasterLivePortrait")
