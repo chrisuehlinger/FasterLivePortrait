@@ -21,6 +21,14 @@ from ..utils.utils import resize_to_limit, prepare_paste_back, get_rotation_matr
     calc_eye_close_ratio, transform_keypoint, concat_feat
 from src.utils import utils
 
+# Attempt to import SPDReader
+try:
+    from spd_editor.spd.reader import SPDReader
+    SPD_READER_AVAILABLE = True
+except ImportError:
+    SPD_READER_AVAILABLE = False
+    print("SPDReader not available. SPD file processing will be disabled.")
+
 
 class FasterLivePortraitPipeline:
     def __init__(self, cfg, **kwargs):
@@ -128,15 +136,91 @@ class FasterLivePortraitPipeline:
         print(f"process source:{source_path} >>>>>>>>")
         try:
             # Check if the source is an SPD file
-            from src.utils.spd_utils import is_spd_file, load_spd_file
-            
-            if is_spd_file(source_path):
-                # Load SPD file directly, skipping face detection and analysis
-                print(f"Loading SPD file: {source_path}")
-                self.src_imgs, self.src_infos, self.is_source_video = load_spd_file(source_path, self.device, self.cfg)
-                self.source_path = source_path
-                print(f"Successfully loaded SPD file: {source_path}")
-                return len(self.src_infos) > 0
+            if source_path.lower().endswith(".spd"):
+                if not SPD_READER_AVAILABLE:
+                    print("SPDReader is not available, cannot process .spd file.")
+                    return False
+                print(f"Processing SPD file: {source_path}")
+                try:
+                    spd_data_obj = SPDReader(source_path)
+                    spd_data = spd_data_obj.read()
+
+                    if spd_data is None:
+                        print(f"Failed to read data from SPD file: {source_path}")
+                        return False
+
+                    # 1. Resized Image (256x256), assuming HWC, RGB, uint8
+                    img_rgb_256 = spd_data.get('resized_image_256')
+                    if img_rgb_256 is None or img_rgb_256.shape != (256, 256, 3):
+                        print("SPD 'resized_image_256' is missing or not 256x256x3.")
+                        return False
+                    self.src_imgs = [img_rgb_256]
+
+                    # 2. Resized landmark data (256x256 space), assuming (106,2) float32
+                    lmk_crop_norm = spd_data.get('resized_landmark_data')
+                    if lmk_crop_norm is None:
+                        print("SPD 'resized_landmark_data' is missing.")
+                        return False
+                    self.src_lmks_list = [lmk_crop_norm.reshape(1, -1, 2)]
+
+                    # 3. Motion Parameters (trans_coeffs_256)
+                    trans_coeffs_256 = spd_data.get('trans_coeffs_256')
+                    if trans_coeffs_256 is None:
+                        print("SPD 'trans_coeffs_256' not found, calculating from landmarks.")
+                        head_pose_256, exp_coeffs_256, R_256, T_256, s_256 = self.estimate_coeffs(lmk_crop_norm, img_rgb_256)
+                        trans_coeffs_256 = np.concatenate([
+                            head_pose_256.reshape(-1), exp_coeffs_256.reshape(-1),
+                            R_256.reshape(-1), T_256.reshape(-1), s_256.reshape(-1)
+                        ])
+                    self.trans_coeffs_list = [trans_coeffs_256.reshape(1, -1)]
+
+                    # 4. Mask data (256x256), assuming (256,256,1) float32
+                    mask_256 = spd_data.get('mask_256')
+                    if mask_256 is None:
+                        print("SPD 'mask_256' not found, attempting to create a default one.")
+                        mask_256 = np.ones((256, 256, 1), dtype=np.float32)
+                    self.mask_list = [mask_256]
+
+                    # 5. Appearance Features (feat_256)
+                    if self.cfg.extract_feat:
+                        feat_256 = spd_data.get('appearance_features')
+                        if feat_256 is None:
+                            print("SPD 'appearance_features' not found, extracting from image.")
+                            feat_256 = self.appearance_feature_extractor.run(img_rgb_256, lmk_crop_norm)
+                        self.feat_list = [feat_256.reshape(1, -1)]
+
+                    # 6. src_info dictionary
+                    M_identity = np.eye(3, dtype=np.float32)
+                    src_info = {
+                        'size_src': (256, 256),
+                        'lmk_src': lmk_crop_norm.copy(),
+                        'lmk_crop': lmk_crop_norm.copy(),
+                        'M_c2o': M_identity,
+                        'M_o2c': M_identity
+                    }
+                    self.src_infos = [src_info]
+
+                    # 7. crop_norm_infos
+                    crop_norm_info = {
+                        'src_img_crop_norm': img_rgb_256.copy(),
+                        'M_c2o': M_identity,
+                        'M_o2c': M_identity,
+                        'size_src_crop': (256, 256)
+                    }
+                    self.crop_norm_infos = [crop_norm_info]
+
+                    # Reset frame_id for new source
+                    self.frame_id = 0
+                    self.R_d_0 = None
+                    self.x_d_0_info = None
+                    self.src_lmk_pre = None
+
+                    print(f"Successfully prepared source from SPD: {source_path}")
+                    return True
+
+                except Exception as e:
+                    print(f"Error processing SPD file {source_path}: {e}")
+                    return False
 
             # Regular image or video processing path
             if utils.is_video(source_path):

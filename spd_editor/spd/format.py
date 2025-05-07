@@ -15,17 +15,37 @@ from typing import Dict, List, Optional, Tuple, TypeVar, Union, Any, BinaryIO
 MAGIC_BYTES = b"SPDV"
 CURRENT_VERSION = 1
 
+# Flags (Bit positions)
+FLAG_HAS_ORIGINAL_IMAGE = 1 << 0
+FLAG_HAS_CROPPED_IMAGE = 1 << 1
+FLAG_HAS_RESIZED_IMAGE = 1 << 2
+FLAG_HAS_LANDMARK_DATA = 1 << 3
+FLAG_HAS_MOTION_PARAMETERS = 1 << 4
+FLAG_HAS_APPEARANCE_FEATURES = 1 << 5
+FLAG_HAS_TRANSFORMATION_MATRICES = 1 << 6
+FLAG_HAS_MASK_DATA = 1 << 7
+# Bits 8-31: Reserved
+
+# Default image dimensions if not otherwise specified for resized
+RESIZED_IMAGE_WIDTH = 256
+RESIZED_IMAGE_HEIGHT = 256
+
+# Number of landmark points (example, can be dynamic)
+DEFAULT_NUM_LANDMARKS = 106
+
 # Header Flags (bit definitions)
 class HeaderFlags(IntEnum):
     """Header flag bits that indicate which sections are present in the SPD file."""
-    HAS_IMAGE = 1 << 0           # File includes source image data
-    HAS_LANDMARKS = 1 << 1       # File includes facial landmark data
-    HAS_MOTION_PARAMS = 1 << 2   # File includes motion parameters
-    HAS_APPEARANCE = 1 << 3      # File includes appearance features
-    HAS_TRANSFORMS = 1 << 4      # File includes transformation matrices
-    HAS_MASK = 1 << 5            # File includes mask data
-    IS_COMPRESSED = 1 << 6       # Data sections are compressed
-    IS_ENCRYPTED = 1 << 7        # Data sections are encrypted
+    HAS_IMAGE = FLAG_HAS_ORIGINAL_IMAGE             # 1 << 0
+    HAS_LANDMARKS = FLAG_HAS_LANDMARK_DATA          # 1 << 3
+    HAS_MOTION_PARAMS = FLAG_HAS_MOTION_PARAMETERS  # 1 << 4
+    HAS_APPEARANCE = FLAG_HAS_APPEARANCE_FEATURES   # 1 << 5 (aligns with FLAG_HAS_APPEARANCE_FEATURES)
+    HAS_TRANSFORMS = FLAG_HAS_TRANSFORMATION_MATRICES # 1 << 6 (aligns with FLAG_HAS_TRANSFORMATION_MATRICES)
+    HAS_MASK = FLAG_HAS_MASK_DATA                   # 1 << 7 (aligns with FLAG_HAS_MASK_DATA)
+    
+    # Assign new non-clashing bits for IS_COMPRESSED and IS_ENCRYPTED
+    IS_COMPRESSED = 1 << 1       # Was 1 << 6
+    IS_ENCRYPTED = 1 << 2        # Was 1 << 7
 
 
 # Section Markers (4-byte identifiers)

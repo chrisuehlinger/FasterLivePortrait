@@ -82,7 +82,7 @@ except ImportError:
 from spd_editor.spd.reader import SPDReader, SPDError, SPDSectionError
 from spd_editor.spd.writer import SPDWriter
 from spd_editor.spd.format import (
-    HeaderFlags, ImageSection, LandmarksSection, LandmarksSection, 
+    HeaderFlags, ImageSection, LandmarksSection, 
     MotionParamsSection, MaskSection
 )
 from spd_editor.spd.validator import (
@@ -641,146 +641,300 @@ class SPDEditorApp:
             
             # Close any currently open file
             if self.spd_reader:
-                self.spd_reader.close()
+                try:
+                    self.spd_reader.close()
+                except Exception as e:
+                    logger.warning(f"Error closing previous SPDReader: {e}")
                 
-            # Open the new file
             self.spd_reader = SPDReader(file_path)
             self.current_file = file_path
             
-            # Update file info
             self.file_path_var.set(os.path.basename(file_path))
             
-            # Reset data
             self.image = None
             self.landmarks = None
             self.mask = None
             self.parameters = {}
-            
+            self._original_image_data: Optional[np.ndarray] = None
+            self._original_landmarks_data: Optional[List[List[float]]] = None
+            self._original_mask_data: Optional[np.ndarray] = None
+            self._original_motion_params: Optional[Dict[str, Any]] = None
+
             self.progress_var.set(30)
             
-            # Load available sections
-            available_sections = self.spd_reader.get_available_sections()
-            logger.info(f"Available sections: {available_sections}")
-            
             # Load image if available
-            if "image" in available_sections:
-                try:
+            try:
+                if self.spd_reader.has_section("image"): # Check using reader's method
                     image_section = self.spd_reader.image
-                    self.image = np.frombuffer(
-                        image_section.data, 
-                        dtype=np.uint8
-                    ).reshape(
-                        image_section.height, 
-                        image_section.width, 
-                        image_section.channels
-                    )
-                    self.dimensions_var.set(f"{image_section.width} × {image_section.height}")
-                except Exception as e:
-                    logger.error(f"Error loading image section: {e}")
-                    messagebox.showwarning("Warning", f"Error loading image section: {e}")
+                    if image_section and image_section.data:
+                        self.image = np.frombuffer(
+                            image_section.data, 
+                            dtype=np.uint8
+                        ).reshape(
+                            image_section.height, 
+                            image_section.width, 
+                            image_section.channels
+                        )
+                        # Ensure image is BGR if it's 3 channels, common for OpenCV
+                        if self.image.ndim == 3 and self.image.shape[2] == 3 and image_section.format.upper() == "RGB":
+                            self.image = cv2.cvtColor(self.image, cv2.COLOR_RGB2BGR)
+                        
+                        self._original_image_data = self.image.copy()
+                        self.dimensions_var.set(f"{image_section.width} × {image_section.height}")
+                    else:
+                        logger.info("Image section data is empty in SPD file.")
+                else:
+                    logger.info("Image section not present in SPD file.")
+            except SPDSectionError:
+                logger.info("Image section not found or error during loading.") # More generic catch
+            except Exception as e:
+                logger.error(f"Error loading image section: {e}", exc_info=True)
+                messagebox.showwarning("Warning", f"Error loading image section: {e}")
             
             self.progress_var.set(50)
             
             # Load landmarks if available
-            if "landmarks" in available_sections:
-                try:
+            try:
+                if self.spd_reader.has_section("landmarks"):
                     landmarks_section = self.spd_reader.landmarks
-                    self.landmarks = landmarks_section.points
-                    self.landmark_count_var.set(f"{landmarks_section.count}")
-                    self.landmark_type_var.set(landmarks_section.landmark_type)
-                except Exception as e:
-                    logger.error(f"Error loading landmarks section: {e}")
-                    messagebox.showwarning("Warning", f"Error loading landmarks section: {e}")
+                    if landmarks_section and landmarks_section.points:
+                        self.landmarks = landmarks_section.points
+                        self._original_landmarks_data = [list(p) for p in self.landmarks]
+                        self.landmark_count_var.set(f"{landmarks_section.count}")
+                        self.landmark_type_var.set(landmarks_section.landmark_type)
+                    else:
+                        logger.info("Landmarks section data is empty in SPD file.")
+                else:
+                    logger.info("Landmarks section not present in SPD file.")
+            except SPDSectionError:
+                logger.info("Landmarks section not found or error during loading.")
+            except Exception as e:
+                logger.error(f"Error loading landmarks section: {e}", exc_info=True)
+                messagebox.showwarning("Warning", f"Error loading landmarks section: {e}")
             
             self.progress_var.set(70)
             
             # Load motion parameters if available
-            if "motion_params" in available_sections:
-                try:
-                    motion_params = self.spd_reader.motion_params
-                    self.parameters = {
-                        name: value
-                        for name, value in zip(motion_params.param_names, motion_params.values)
-                    }
-                except Exception as e:
-                    logger.error(f"Error loading motion parameters section: {e}")
-                    messagebox.showwarning("Warning", f"Error loading motion parameters section: {e}")
+            try:
+                if self.spd_reader.has_section("motion_params"):
+                    motion_params_section = self.spd_reader.motion_params
+                    if motion_params_section and motion_params_section.param_names:
+                        self.parameters = {
+                            name: value
+                            for name, value in zip(motion_params_section.param_names, motion_params_section.values)
+                        }
+                        self._original_motion_params = {
+                            'param_names': list(motion_params_section.param_names),
+                            'values': list(motion_params_section.values)
+                        }
+                    else:
+                        logger.info("Motion parameters section data is empty in SPD file.")
+                else:
+                    logger.info("Motion parameters section not present in SPD file.")
+            except SPDSectionError:
+                logger.info("Motion parameters section not found or error during loading.")
+            except Exception as e:
+                logger.error(f"Error loading motion parameters section: {e}", exc_info=True)
+                messagebox.showwarning("Warning", f"Error loading motion parameters section: {e}")
             
             # Load mask if available
-            if "mask" in available_sections:
-                try:
-                    mask_section = self.spd_reader.mask
-                    self.mask = np.frombuffer(
-                        mask_section.data, 
-                        dtype=np.uint8
-                    ).reshape(
-                        mask_section.height, 
-                        mask_section.width
-                    )
-                except Exception as e:
-                    logger.error(f"Error loading mask section: {e}")
-                    messagebox.showwarning("Warning", f"Error loading mask section: {e}")
+            try:
+                if self.spd_reader.has_section("mask"):
+                    mask_section_obj = self.spd_reader.mask # Renamed to avoid conflict
+                    if mask_section_obj and mask_section_obj.data:
+                        # Assuming mask is single channel uint8 based on reader.py and format.py
+                        # If MaskSection.format gives more info (e.g. "float32"), adjust dtype.
+                        # For now, stick to uint8 as per previous logic.
+                        self.mask = np.frombuffer(
+                            mask_section_obj.data, 
+                            dtype=np.uint8 
+                        ).reshape(
+                            mask_section_obj.height, 
+                            mask_section_obj.width
+                            # If mask_section_obj.format implied channels, add it here.
+                        )
+                        self._original_mask_data = self.mask.copy()
+                    else:
+                        logger.info("Mask section data is empty in SPD file.")
+                else:
+                    logger.info("Mask section not present in SPD file.")
+            except SPDSectionError:
+                logger.info("Mask section not found or error during loading.")
+            except Exception as e:
+                logger.error(f"Error loading mask section: {e}", exc_info=True)
+                messagebox.showwarning("Warning", f"Error loading mask section: {e}")
             
             self.progress_var.set(90)
             
-            # Update parameter controls
             self._create_parameter_sliders()
-            
-            # Update the display
             self.update_display()
             
             self.progress_var.set(100)
             self.status_text.set(f"Loaded {os.path.basename(file_path)}")
             
+        except SPDError as e:
+            logger.error(f"SPD Error loading file {file_path}: {e}", exc_info=True)
+            messagebox.showerror("SPD Error", f"Failed to load SPD file: {e}")
+            self.status_text.set("Error loading SPD file")
+            self.progress_var.set(0)
         except Exception as e:
-            logger.error(f"Error loading file: {e}")
+            logger.error(f"Generic error loading file {file_path}: {e}", exc_info=True)
             messagebox.showerror("Error", f"Failed to load file: {e}")
             self.status_text.set("Error loading file")
             self.progress_var.set(0)
-    
+
+    def _prepare_image_section(self) -> Optional[np.ndarray]:
+        if self.image is not None:
+            return self.image
+        return None
+
+    def _prepare_landmarks_section(self) -> Optional[np.ndarray]:
+        if self.landmarks is not None and len(self.landmarks) > 0:
+            try:
+                landmarks_array = np.array(self.landmarks, dtype=np.float32)
+                if landmarks_array.ndim == 2:
+                    return landmarks_array
+                else:
+                    logger.warning(f"Landmarks array is not 2D: shape {landmarks_array.shape}")
+                    return None
+            except Exception as e:
+                logger.error(f"Error converting landmarks to NumPy array: {e}")
+                return None
+        return None
+
+    def _prepare_mask_section(self) -> Optional[np.ndarray]:
+        if self.mask is not None:
+            if self.mask.ndim == 2:
+                return self.mask
+            elif self.mask.ndim == 3 and self.mask.shape[2] == 1:
+                return self.mask.squeeze(axis=-1)
+            else:
+                logger.warning(f"Mask has unexpected shape for saving: {self.mask.shape}")
+                return None
+        return None
+
+    def _prepare_motion_params_section(self) -> Optional[Dict[str, Any]]:
+        if self.parameters:
+            # SPDWriter now expects {'names': List[str], 'values': List[float]}
+            param_names = list(self.parameters.keys())
+            param_values = [float(self.parameters[name]) for name in param_names]
+            
+            if not param_names: # If parameters dict was empty
+                return None
+
+            return {
+                "names": param_names,
+                "values": param_values
+            }
+        return None
+
+    def _perform_save_to_path(self, filepath: str) -> bool:
+        self.status_text.set(f"Saving to {os.path.basename(filepath)}...")
+        self.progress_var.set(0)
+        
+        spd_data_dict: Dict[str, Any] = {}
+
+        try:
+            prepared_image = self._prepare_image_section()
+            if prepared_image is not None:
+                spd_data_dict['original_image'] = prepared_image
+                # Determine image format (assuming BGR if 3 channels, else grayscale or other)
+                if prepared_image.ndim == 3 and prepared_image.shape[2] == 3:
+                    spd_data_dict['original_image_format'] = "BGR" 
+                elif prepared_image.ndim == 2 or (prepared_image.ndim == 3 and prepared_image.shape[2] == 1):
+                    spd_data_dict['original_image_format'] = "GRAYSCALE"
+                else:
+                    spd_data_dict['original_image_format'] = "UNKNOWN" # Or handle more formats
+            self.progress_var.set(10)
+
+            prepared_landmarks = self._prepare_landmarks_section()
+            if prepared_landmarks is not None:
+                spd_data_dict['landmarks_original'] = prepared_landmarks
+                spd_data_dict['landmarks_original_type'] = self.landmark_type_var.get() if self.landmark_type_var.get() else "unknown"
+            self.progress_var.set(20)
+
+            prepared_mask = self._prepare_mask_section()
+            if prepared_mask is not None:
+                spd_data_dict['mask_data'] = prepared_mask
+                spd_data_dict['mask_data_format'] = "alpha" # Assuming mask is alpha
+            self.progress_var.set(30)
+
+            prepared_motion_params = self._prepare_motion_params_section()
+            if prepared_motion_params is not None:
+                spd_data_dict['motion_params'] = prepared_motion_params
+            self.progress_var.set(40)
+
+            if not spd_data_dict:
+                messagebox.showerror("Save Error", "No data available to save.")
+                self.status_text.set("Save cancelled - no data.")
+                self.progress_var.set(0)
+                return False
+            
+            self.progress_var.set(50)
+            writer = SPDWriter(filepath=filepath, data=spd_data_dict)
+            self.progress_var.set(60)
+            writer.write()
+            self.progress_var.set(90)
+            
+            self.progress_var.set(100)
+            self.status_text.set(f"Successfully saved to {os.path.basename(filepath)}")
+            logger.info(f"SPD file saved to {filepath}")
+            
+            if 'original_image' in spd_data_dict and self.image is not None: self._original_image_data = self.image.copy()
+            if 'landmarks_original' in spd_data_dict and self.landmarks is not None: self._original_landmarks_data = [list(p) for p in self.landmarks]
+            if 'mask_data' in spd_data_dict and self.mask is not None: self._original_mask_data = self.mask.copy()
+            if 'motion_params' in spd_data_dict and self.parameters:
+                 self._original_motion_params = {
+                    'param_names': list(self.parameters.keys()),
+                    'values': [float(self.parameters[name]) for name in self.parameters.keys()]
+                }
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error saving SPD file to {filepath}: {e}", exc_info=True)
+            messagebox.showerror("Save Error", f"Failed to save file: {e}")
+            self.status_text.set(f"Error saving file: {e}")
+            self.progress_var.set(0)
+            return False
+
     def save_file(self, event=None):
         """Save the current SPD file."""
         if not self.current_file:
-            return self.save_file_as()
+            self.save_file_as()
+            return
             
-        try:
-            if not self.spd_reader or not self.landmarks:
-                messagebox.showerror("Error", "No data to save")
-                return
-                
-            # Implement saving changes to the current file
-            # For now, just show a message
-            messagebox.showinfo("Not Implemented", "File saving will be implemented in a future update")
-        except Exception as e:
-            logger.error(f"Error saving file: {e}")
-            messagebox.showerror("Error", f"Failed to save file: {e}")
+        logger.info(f"Saving current file: {self.current_file}")
+        self._perform_save_to_path(self.current_file)
     
     def save_file_as(self):
         """Save the current SPD file with a new name."""
-        if not self.spd_reader or not self.landmarks:
-            messagebox.showerror("Error", "No data to save")
-            return
-            
+        default_filename = os.path.basename(self.current_file) if self.current_file else "untitled.spd"
+        initial_dir = os.path.dirname(self.current_file) if self.current_file else "."
+
         file_path = filedialog.asksaveasfilename(
-            title="Save SPD File",
+            title="Save SPD File As",
+            initialfile=default_filename,
+            initialdir=initial_dir,
             filetypes=[("SPD Files", "*.spd")],
             defaultextension=".spd"
         )
         
         if not file_path:
+            self.status_text.set("Save As cancelled.")
             return
             
-        try:
-            # Implement saving to a new file
-            # For now, just show a message
-            messagebox.showinfo("Not Implemented", "File saving will be implemented in a future update")
-        except Exception as e:
-            logger.error(f"Error saving file: {e}")
-            messagebox.showerror("Error", f"Failed to save file: {e}")
+        logger.info(f"Saving file as: {file_path}")
+        if self._perform_save_to_path(file_path):
+            self.current_file = file_path
+            self.file_path_var.set(os.path.basename(file_path))
+            if self.spd_reader:
+                 try:
+                    self.spd_reader.close()
+                 except Exception as e:
+                    logger.warning(f"Could not close previous SPDReader: {e}")
     
     def create_new_spd(self, event=None):
         """Create a new SPD file from a source image."""
-        # Open file dialog to select source image
         image_path = filedialog.askopenfilename(
             title="Select Source Image",
             initialdir="/root/FasterLivePortrait/spd_editor/data",
@@ -793,7 +947,6 @@ class SPDEditorApp:
         if not image_path:
             return
             
-        # Select output file
         output_path = filedialog.asksaveasfilename(
             title="Save SPD File",
             filetypes=[("SPD Files", "*.spd")],
@@ -804,107 +957,79 @@ class SPDEditorApp:
             return
             
         try:
-            # Start a background thread to create the SPD file
             self.status_text.set("Creating SPD file...")
             self.progress_var.set(10)
             
             def create_spd_task():
                 try:
-                    # Read the source image
-                    img = cv2.imread(image_path)
-                    if img is None:
+                    img_cv2 = cv2.imread(image_path)
+                    if img_cv2 is None:
                         raise ValueError(f"Failed to read source image: {image_path}")
                     
-                    # Create SPD file
-                    with SPDWriter(output_path) as writer:
-                        # Add image section
-                        height, width = img.shape[:2]
-                        channels = 3 if len(img.shape) == 3 else 1
-                        
-                        # Create and write image section
-                        img_section = ImageSection(
-                            width=width,
-                            height=height,
-                            channels=channels,
-                            format="BGR" if channels == 3 else "GRAY",
-                            data=img.tobytes()
-                        )
-                        writer.write_image_section(img_section)
-                        self.root.after(0, lambda: self.status_text.set("Image section added..."))
-                        self.root.after(0, lambda: self.progress_var.set(30))
-                        
-                        # Extract landmarks if face detection is available
-                        landmarks_added = False
-                        if HAVE_FACE_DETECTION and HAVE_CV2:
-                            try:
-                                self.root.after(0, lambda: self.status_text.set("Detecting face..."))
-                                
-                                current_predict_type = self.infer_params.get('predict_type', 'ort')
-                                logger.info(f"Using predict_type: {current_predict_type} for FaceDetector")
-
-                                face_detector = FaceDetector(predict_type=current_predict_type)
-                                
-                                # Detect the largest face in the image
-                                # largest_face is a dict: {'bbox': ..., 'kps': ..., 'landmark': np.array(106,2), ...}
-                                # The 'landmark' key contains the 106 points from FaceAnalysisModel
-                                largest_face = face_detector.detect_largest_face(img)
-                                
-                                if largest_face and largest_face.get('landmark') is not None:
-                                    self.root.after(0, lambda: self.status_text.set("Landmarks obtained from FaceDetector."))
-                                    self.root.after(0, lambda: self.progress_var.set(60)) # Adjusted progress
-                                    
-                                    landmarks_np = largest_face['landmark'] # Use landmarks directly from FaceDetector
-                                        
-                                    if landmarks_np is not None and len(landmarks_np) > 0:
-                                            # Determine the landmark type and dimensions
-                                            # Using a more specific type name if these are always 106 2D landmarks
-                                            landmark_type = "face_landmarks_106" 
-                                            dimensions = 2  # Assuming 2D landmarks
-                                            
-                                            if landmarks_np.ndim == 2 and landmarks_np.shape[1] == 3: # Check if 3D
-                                                dimensions = 3
-                                            
-                                            # Create landmarks section
-                                            landmarks_section = LandmarksSection(
-                                                count=len(landmarks_np),
-                                                dimensions=dimensions,
-                                                landmark_type=landmark_type,
-                                                points=landmarks_np.tolist()
-                                            )
-                                            
-                                            # Write landmarks section
-                                            writer.write_landmarks_section(landmarks_section)
-                                            self.root.after(0, lambda: self.status_text.set("Landmarks section added..."))
-                                            self.root.after(0, lambda: self.progress_var.set(70))
-                                            landmarks_added = True
-                                    else:
-                                        logger.info("FaceDetector returned landmarks, but they are empty or None.")
-                                        self.root.after(0, lambda: self.status_text.set("Empty landmarks from FaceDetector."))
-                                else:
-                                    logger.info("No face detected or landmarks not found by FaceDetector.")
-                                    self.root.after(0, lambda: self.status_text.set("No landmarks found by FaceDetector."))
-                            except Exception as e:
-                                logger.error(f"Error during face detection or landmark processing: {e}", exc_info=True)
-                                self.root.after(0, lambda: self.status_text.set(f"Error in face/landmark processing: {e}"))
-                        
-                        if not landmarks_added:
-                            self.root.after(0, lambda: self.status_text.set("No landmarks detected or face detection unavailable"))
-                        
-                        # Finalize SPD file
-                        writer.finalize()
-                        self.root.after(0, lambda: self.status_text.set("SPD file created"))
-                        self.root.after(0, lambda: self.progress_var.set(100))
+                    spd_data_for_writer: Dict[str, Any] = {}
+                    spd_data_for_writer['original_image'] = img_cv2
+                    # Add image format string
+                    if img_cv2.ndim == 3 and img_cv2.shape[2] == 3:
+                        spd_data_for_writer['original_image_format'] = "BGR"
+                    elif img_cv2.ndim == 2 or (img_cv2.ndim == 3 and img_cv2.shape[2] == 1):
+                         spd_data_for_writer['original_image_format'] = "GRAYSCALE"
+                    else:
+                        spd_data_for_writer['original_image_format'] = "UNKNOWN"
                     
-                    # Open the newly created file
+                    self.root.after(0, lambda: self.status_text.set("Image data prepared..."))
+                    self.root.after(0, lambda: self.progress_var.set(30))
+                        
+                    landmarks_added_to_dict = False
+                    if HAVE_FACE_DETECTION and HAVE_CV2:
+                        try:
+                            self.root.after(0, lambda: self.status_text.set("Detecting face..."))
+                            
+                            current_predict_type = self.infer_params.get('predict_type', 'ort')
+                            logger.info(f"Using predict_type: {current_predict_type} for FaceDetector")
+
+                            face_detector = FaceDetector(predict_type=current_predict_type)
+                            largest_face = face_detector.detect_largest_face(img_cv2)
+                            
+                            if largest_face and largest_face.get('landmark') is not None:
+                                self.root.after(0, lambda: self.status_text.set("Landmarks obtained from FaceDetector."))
+                                self.root.after(0, lambda: self.progress_var.set(60))
+                                
+                                landmarks_np_from_detector = largest_face['landmark']
+                                    
+                                if landmarks_np_from_detector is not None and landmarks_np_from_detector.size > 0:
+                                    spd_data_for_writer['landmarks_original'] = landmarks_np_from_detector.astype(np.float32)
+                                    # Add landmark type string
+                                    spd_data_for_writer['landmarks_original_type'] = "face_detector_mediapipe" # Example, adjust if detector gives type
+                                    self.root.after(0, lambda: self.status_text.set("Landmarks data prepared..."))
+                                    self.root.after(0, lambda: self.progress_var.set(70))
+                                    landmarks_added_to_dict = True
+                                else:
+                                    logger.info("FaceDetector returned landmarks, but they are empty or None.")
+                                    self.root.after(0, lambda: self.status_text.set("Empty landmarks from FaceDetector."))
+                            else:
+                                logger.info("No face detected or landmarks not found by FaceDetector.")
+                                self.root.after(0, lambda: self.status_text.set("No landmarks found by FaceDetector."))
+                        except Exception as e:
+                            logger.error(f"Error during face detection or landmark processing: {e}", exc_info=True)
+                            self.root.after(0, lambda: self.status_text.set(f"Error in face/landmark processing: {e}"))
+                    
+                    if not landmarks_added_to_dict:
+                        self.root.after(0, lambda: self.status_text.set("No landmarks detected or face detection unavailable"))
+                    
+                    writer_instance = SPDWriter(filepath=output_path, data=spd_data_for_writer)
+                    writer_instance.write()
+                    
+                    self.root.after(0, lambda: self.status_text.set("SPD file created"))
+                    self.root.after(0, lambda: self.progress_var.set(100))
+                    
                     self.root.after(0, lambda: self.load_file(output_path))
                     
                 except Exception as e:
-                    logger.error(f"Error creating SPD file: {e}")
+                    logger.error(f"Error creating SPD file: {e}", exc_info=True)
                     self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to create SPD file: {e}"))
                     self.root.after(0, lambda: self.status_text.set("Error creating SPD file"))
                     self.root.after(0, lambda: self.progress_var.set(0))
             
-            # Start the thread
             thread = threading.Thread(target=create_spd_task)
             thread.daemon = True
             thread.start()
@@ -936,20 +1061,16 @@ class SPDEditorApp:
             return
             
         try:
-            # Determine whether to include landmarks in the exported image
             include_landmarks = messagebox.askyesno(
                 "Include Landmarks", 
                 "Include landmarks in the exported image?"
             )
             
             if include_landmarks and self.landmarks is not None:
-                # Export with landmarks
                 export_img = draw_landmarks(self.image, self.landmarks, self.visualization_options)
             else:
-                # Export original image
                 export_img = self.image
             
-            # Save the image
             cv2.imwrite(file_path, export_img)
             self.status_text.set(f"Image exported to {os.path.basename(file_path)}")
             
@@ -963,7 +1084,6 @@ class SPDEditorApp:
             messagebox.showerror("Error", "No landmarks to export")
             return
             
-        # Ask for the export format
         format_options = ["CSV", "JSON"]
         format_var = tk.StringVar(value=format_options[0])
         
@@ -997,7 +1117,6 @@ class SPDEditorApp:
             export_format = format_var.get().lower()
             dialog.destroy()
             
-            # Open save dialog
             file_ext = ".csv" if export_format == "csv" else ".json"
             file_path = filedialog.asksaveasfilename(
                 title=f"Export Landmarks as {export_format.upper()}",
@@ -1010,14 +1129,12 @@ class SPDEditorApp:
                 
             try:
                 if export_format == "csv":
-                    # Export as CSV
                     import csv
                     with open(file_path, 'w', newline='') as f:
                         writer = csv.writer(f)
                         for point in self.landmarks:
                             writer.writerow(point)
                 else:
-                    # Export as JSON
                     import json
                     with open(file_path, 'w') as f:
                         json.dump({
@@ -1036,7 +1153,6 @@ class SPDEditorApp:
         ttk.Button(button_frame, text="Cancel", command=on_cancel).pack(side=tk.RIGHT, padx=5)
         ttk.Button(button_frame, text="OK", command=on_ok).pack(side=tk.RIGHT, padx=5)
         
-        # Center the dialog on the main window
         dialog.update_idletasks()
         x = self.root.winfo_rootx() + (self.root.winfo_width() - dialog.winfo_width()) // 2
         y = self.root.winfo_rooty() + (self.root.winfo_height() - dialog.winfo_height()) // 2
@@ -1063,7 +1179,6 @@ class SPDEditorApp:
             return
             
         try:
-            # Save the mask
             cv2.imwrite(file_path, self.mask)
             self.status_text.set(f"Mask exported to {os.path.basename(file_path)}")
             
@@ -1078,20 +1193,15 @@ class SPDEditorApp:
             return
             
         try:
-            # Create a validator
             validator = SPDValidator(self.current_file)
-            
-            # Run validation
             report = validator.validate(level=ValidationLevel.STANDARD)
             
-            # Create a result dialog
             dialog = tk.Toplevel(self.root)
             dialog.title("SPD Validation Results")
             dialog.geometry("600x400")
             dialog.transient(self.root)
             dialog.grab_set()
             
-            # Status at the top
             status_frame = ttk.Frame(dialog)
             status_frame.pack(fill=tk.X, padx=10, pady=10)
             
@@ -1105,7 +1215,6 @@ class SPDEditorApp:
             )
             status_label.pack(side=tk.LEFT)
             
-            # Summary info
             info_frame = ttk.Frame(dialog)
             info_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
             
@@ -1122,12 +1231,10 @@ class SPDEditorApp:
                            f"{report.get_warning_count()} warnings, " +
                            f"{report.get_info_count()} info").pack(anchor=tk.W)
             
-            # Issues list
             if report.issues:
                 issues_frame = ttk.LabelFrame(dialog, text="Issues")
                 issues_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
                 
-                # Create a Text widget for the issues
                 issues_text = tk.Text(issues_frame, wrap=tk.WORD, height=10)
                 issues_scroll = ttk.Scrollbar(issues_frame, orient=tk.VERTICAL, command=issues_text.yview)
                 issues_text.configure(yscrollcommand=issues_scroll.set)
@@ -1135,12 +1242,10 @@ class SPDEditorApp:
                 issues_scroll.pack(side=tk.RIGHT, fill=tk.Y)
                 issues_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
                 
-                # Configure tags for different severity levels
                 issues_text.tag_configure("ERROR", foreground="red")
                 issues_text.tag_configure("WARNING", foreground="orange")
                 issues_text.tag_configure("INFO", foreground="blue")
                 
-                # Insert issues
                 for i, issue in enumerate(report.issues, 1):
                     severity = issue.severity.name
                     issues_text.insert(tk.END, f"{i}. [{severity}] {issue.section}: {issue.message}\n", severity)
@@ -1148,13 +1253,10 @@ class SPDEditorApp:
                         issues_text.insert(tk.END, f"   Suggestion: {issue.suggestion}\n")
                     issues_text.insert(tk.END, "\n")
                 
-                # Make the text widget read-only
                 issues_text.configure(state=tk.DISABLED)
             
-            # Close button
             ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=10)
             
-            # Center the dialog on the main window
             dialog.update_idletasks()
             x = self.root.winfo_rootx() + (self.root.winfo_width() - dialog.winfo_width()) // 2
             y = self.root.winfo_rooty() + (self.root.winfo_height() - dialog.winfo_height()) // 2
@@ -1182,24 +1284,19 @@ class SPDEditorApp:
         try:
             from mpl_toolkits.mplot3d import Axes3D
             
-            # Create a new window for 3D visualization
             viz_window = tk.Toplevel(self.root)
             viz_window.title("3D Landmark Visualization")
             viz_window.geometry("800x600")
             
-            # Create a Figure and a 3D Axes
             fig = Figure(figsize=(8, 6), dpi=100)
             ax = fig.add_subplot(111, projection='3d')
             
-            # Extract x, y, z coordinates
             x = [p[0] for p in self.landmarks]
             y = [p[1] for p in self.landmarks]
             z = [p[2] for p in self.landmarks]
             
-            # Plot landmarks as points
             ax.scatter(x, y, z, c='g', marker='o', s=20)
             
-            # Draw connections if available
             landmark_type = None
             num_landmarks = len(self.landmarks)
             if num_landmarks == 68:
@@ -1213,22 +1310,18 @@ class SPDEditorApp:
                                [y[start_idx], y[end_idx]],
                                [z[start_idx], z[end_idx]], 'b-', linewidth=0.5)
             
-            # Configure axes
             ax.set_title("3D Face Mesh")
             ax.set_xlabel("X")
             ax.set_ylabel("Y")
             ax.set_zlabel("Z")
             ax.set_box_aspect([1, 1, 1])
             
-            # Create a toolbar frame
             toolbar_frame = ttk.Frame(viz_window)
             toolbar_frame.pack(side=tk.BOTTOM, fill=tk.X)
             
-            # Create sliders for rotation control
             slider_frame = ttk.Frame(toolbar_frame)
             slider_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=5)
             
-            # Elevation slider
             ttk.Label(slider_frame, text="Elevation:").grid(row=0, column=0, padx=5, sticky=tk.W)
             elev_var = tk.IntVar(value=30)
             elev_slider = ttk.Scale(
@@ -1240,7 +1333,6 @@ class SPDEditorApp:
             )
             elev_slider.grid(row=0, column=1, padx=5, sticky=tk.EW)
             
-            # Azimuth slider
             ttk.Label(slider_frame, text="Azimuth:").grid(row=1, column=0, padx=5, sticky=tk.W)
             azim_var = tk.IntVar(value=45)
             azim_slider = ttk.Scale(
@@ -1252,7 +1344,6 @@ class SPDEditorApp:
             )
             azim_slider.grid(row=1, column=1, padx=5, sticky=tk.EW)
             
-            # Configure sliders to update view
             def update_view(*args):
                 ax.view_init(elev=elev_var.get(), azim=azim_var.get())
                 canvas.draw()
@@ -1260,12 +1351,10 @@ class SPDEditorApp:
             elev_slider.configure(command=lambda *args: update_view())
             azim_slider.configure(command=lambda *args: update_view())
             
-            # Create the canvas and add to window
             canvas = FigureCanvasTkAgg(fig, master=viz_window)
             canvas.draw()
             canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
             
-            # Initial view update
             update_view()
             
         except Exception as e:
@@ -1284,16 +1373,13 @@ class SPDEditorApp:
     
     def show_documentation(self):
         """Show documentation dialog."""
-        # Create a new window
         doc_window = tk.Toplevel(self.root)
         doc_window.title("SPD Editor Documentation")
         doc_window.geometry("800x600")
         
-        # Create a notebook with tabs for different documentation sections
         notebook = ttk.Notebook(doc_window)
         notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Overview tab
         overview_frame = ttk.Frame(notebook)
         notebook.add(overview_frame, text="Overview")
         
@@ -1321,10 +1407,8 @@ An SPD (Source Portrait Descriptor) is a binary file format that stores pre-proc
 - Visualize SPD data
 """)
         
-        # Make the text widget read-only
         overview_text.configure(state=tk.DISABLED)
         
-        # Usage tab
         usage_frame = ttk.Frame(notebook)
         notebook.add(usage_frame, text="Usage")
         
@@ -1362,10 +1446,8 @@ An SPD (Source Portrait Descriptor) is a binary file format that stores pre-proc
 3. Review the validation report
 """)
         
-        # Make the text widget read-only
         usage_text.configure(state=tk.DISABLED)
         
-        # Keyboard Shortcuts tab
         shortcuts_frame = ttk.Frame(notebook)
         notebook.add(shortcuts_frame, text="Shortcuts")
         
@@ -1385,14 +1467,11 @@ An SPD (Source Portrait Descriptor) is a binary file format that stores pre-proc
 - Ctrl+E: Export the image
 """)
         
-        # Make the text widget read-only
         shortcuts_text.configure(state=tk.DISABLED)
         
-        # Close button
         close_button = ttk.Button(doc_window, text="Close", command=doc_window.destroy)
         close_button.pack(pady=10)
         
-        # Center the window on the main window
         doc_window.update_idletasks()
         x = self.root.winfo_rootx() + (self.root.winfo_width() - doc_window.winfo_width()) // 2
         y = self.root.winfo_rooty() + (self.root.winfo_height() - doc_window.winfo_height()) // 2
