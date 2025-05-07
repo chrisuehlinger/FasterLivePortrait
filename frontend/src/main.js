@@ -62,6 +62,17 @@ const keyLuminosities = keyColors.map(color => {
     return luminance;
 });
 
+const characterScales = [
+    0.85,  
+    0.5,
+    0.5
+];
+const characterTopOffsets = [
+    1,  
+    0.5,
+    0.5
+];
+
 let currentBackgroundIndex = 0;
 
 // Initialize Three.js scene
@@ -663,7 +674,7 @@ function updateTextureAspectRatio() {
         // Force a 1:1 aspect ratio for the video regardless of source dimensions
         
         // Calculate the target size for the video (square)
-        const targetHeight = 0.85; // Video takes up 60% of the normalized height
+        const targetHeight = characterScales[currentBackgroundIndex]; // Video takes up 60% of the normalized height
         
         // To maintain a true 1:1 aspect ratio (square) regardless of window dimensions:
         // 1. Start with the desired height in normalized coordinates
@@ -676,7 +687,7 @@ function updateTextureAspectRatio() {
         videoMesh.scale.set(videoScaleX, videoScaleY, 1);
         
         // Position the video at the top center of the composition
-        videoMesh.position.y = (bgScaleY - videoScaleY);
+        videoMesh.position.y = characterTopOffsets[currentBackgroundIndex] * (bgScaleY - videoScaleY);
         videoMesh.position.x = 0; // Center horizontally
     }
 }
