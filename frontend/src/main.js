@@ -742,16 +742,12 @@ function connectToWebSocket() {
         websocket.close();
     }
     
-    if (!sessionId) {
-        showStatus('Error: No session ID provided. Cannot connect to stream.', true);
-        return;
-    }
-    
-    websocket = new WebSocket(`${WS_URL}/ws/viewer/${sessionId}`);
+    // Always connect to the broadcast endpoint
+    websocket = new WebSocket(`${WS_URL}/ws/viewer`);
     
     websocket.onopen = () => {
         isConnected = true;
-        showStatus('Connected to stream. Waiting for video...', false);
+        showStatus('Connected to broadcast stream. Waiting for video...', false);
         
         // Send heartbeat every 30 seconds to keep connection alive
         setInterval(() => {
@@ -790,8 +786,9 @@ async function handleWebSocketMessage(event) {
             // Handle source image switching
             if (jsonData.status === 'source_switched') {
                 const sourceIndex = jsonData.current_source;
-                console.log(`Source image switched to index ${sourceIndex}: ${jsonData.source_name}`);
-                showStatus(`Source changed to: ${jsonData.source_name}`, false);
+                const actorId = jsonData.actor_id || 'Unknown';
+                console.log(`Source image switched to index ${sourceIndex}: ${jsonData.source_name} by actor ${actorId}`);
+                showStatus(`Source changed to: ${jsonData.source_name} by actor ${actorId}`, false);
                 
                 // Switch background to match the source
                 switchBackground(sourceIndex);
@@ -877,17 +874,6 @@ function getSessionIdFromUrl() {
     return urlParams.get('session');
 }
 
-// Event listeners
-connectButton.addEventListener('click', () => {
-    sessionId = sessionIdInput.value.trim();
-    if (!sessionId) {
-        showStatus('Please enter a session ID', true);
-        return;
-    }
-    
-    connectToWebSocket();
-});
-
 // Initialize when page loads
 function initialize() {
     // Initialize Three.js
@@ -896,12 +882,12 @@ function initialize() {
     // Start animation loop
     animate();
     
-    // Check for session ID in URL
-    const urlSessionId = getSessionIdFromUrl();
-    if (urlSessionId) {
-        sessionId = urlSessionId;
-        sessionIdInput.value = sessionId;
-        connectToWebSocket();
+    // Connect to the broadcast stream directly (no session ID needed)
+    connectToWebSocket();
+    
+    // Hide session input div since we don't need it anymore
+    if (sessionInputDiv) {
+        sessionInputDiv.style.display = 'none';
     }
     
     // Start FPS timer

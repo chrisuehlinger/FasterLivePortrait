@@ -40,15 +40,34 @@ logger = logging.getLogger("websocket_server")
 # Connection manager for WebSockets
 class ConnectionManager:
     def __init__(self):
-        self.actor_connections: Dict[str, WebSocket] = {}
-        self.viewer_connections: Dict[str, List[WebSocket]] = {}
-        self.frame_queues: Dict[str, asyncio.Queue] = {}
+        # Original connection mappings for backward compatibility
+        self.actor_connections: Dict[str, WebSocket] = {}  # session_id -> WebSocket
+        self.viewer_connections: Dict[str, List[WebSocket]] = {}  # session_id -> [WebSocket]
+        
+        # New broadcast viewer list (all viewers see the same stream)
+        self.broadcast_viewers: List[WebSocket] = []
+        
+        # Track active actor who controls the broadcast
+        self.active_actor_id: Optional[str] = None
+        self.last_active_change_time: float = 0
+        
+        # Frame queues and processing state
+        self.frame_queues: Dict[str, asyncio.Queue] = {}  # For backward compatibility
+        self.broadcast_queue: asyncio.Queue = asyncio.Queue(maxsize=1)  # For active actor frames
+        
         self.processed_frames: Dict[str, np.ndarray] = {}
-        self.frame_processors: Dict[str, object] = {}
+        self.frame_processors: Dict[str, object] = {}  # For backward compatibility
+        self.broadcast_processor: object = None  # Processor for broadcast stream
+        
         self.is_processing: Dict[str, bool] = {}
+        self.is_broadcast_processing: bool = False
+        
         self.frames_received: Dict[str, int] = {}
         self.frames_processed: Dict[str, int] = {}
-        self.processing_tasks: Dict[str, asyncio.Task] = {}
+        
+        self.processing_tasks: Dict[str, asyncio.Task] = {}  # For backward compatibility
+        self.broadcast_processing_task: Optional[asyncio.Task] = None
+        
         self.performance_metrics = {
             "receive_time": [],
             "decode_time": [],
@@ -64,35 +83,79 @@ class ConnectionManager:
         self.last_metrics_log = time.time()
         self.metrics_log_interval = 5.0  # Log metrics every 5 seconds
         
+    # Original methods for backward compatibility
     async def connect_actor(self, session_id: str, websocket: WebSocket):
+        """Connect an actor using the original session-based method"""
         await websocket.accept()
         self.actor_connections[session_id] = websocket
-        self.frame_queues[session_id] = asyncio.Queue(maxsize=1)  # Only store 1 frame
+        self.frame_queues[session_id] = asyncio.Queue(maxsize=1)
         self.is_processing[session_id] = False
         self.frames_received[session_id] = 0
         self.frames_processed[session_id] = 0
         logger.info(f"Actor connected: {session_id}")
         
-        # Start the processing task for this session
+        # Set as active actor if none exists
+        if self.active_actor_id is None:
+            self.set_active_actor(session_id)
+        
+        # Start the processing task for this session (for backward compatibility)
         self.processing_tasks[session_id] = asyncio.create_task(
             self._process_frames_loop(session_id)
         )
         
+        # Also start broadcast processing task if not running
+        if self.broadcast_processing_task is None or self.broadcast_processing_task.done():
+            self.broadcast_processing_task = asyncio.create_task(
+                self._process_broadcast_frames_loop()
+            )
+        
+    def set_active_actor(self, actor_id: str):
+        """Set the current active actor who controls the broadcast stream"""
+        if actor_id in self.actor_connections:
+            previous_actor = self.active_actor_id
+            self.active_actor_id = actor_id
+            self.last_active_change_time = time.time()
+            logger.info(f"Actor {actor_id} is now active (previous: {previous_actor})")
+            return True
+        return False
+        
     async def connect_viewer(self, session_id: str, websocket: WebSocket):
+        """Connect a viewer using the original session-based method"""
         await websocket.accept()
         
-        # Initialize list for this session if it doesn't exist
-        if session_id not in self.viewer_connections:
-            self.viewer_connections[session_id] = []
-            
-        # Add this viewer to the session's viewers
-        self.viewer_connections[session_id].append(websocket)
-        logger.info(f"Viewer connected to session: {session_id}, total viewers: {len(self.viewer_connections[session_id])}")
+        # Also add this viewer to the broadcast list if it's not a legacy client
+        if session_id == "broadcast":
+            self.broadcast_viewers.append(websocket)
+            logger.info(f"Viewer connected to broadcast, total broadcast viewers: {len(self.broadcast_viewers)}")
+        else:
+            # Legacy session-based viewer
+            if session_id not in self.viewer_connections:
+                self.viewer_connections[session_id] = []
+                
+            self.viewer_connections[session_id].append(websocket)
+            logger.info(f"Viewer connected to session: {session_id}, total viewers: {len(self.viewer_connections[session_id])}")
+        
+    # New method for connecting to broadcast
+    async def connect_broadcast_viewer(self, websocket: WebSocket):
+        """Connect a viewer directly to the broadcast stream"""
+        await websocket.accept()
+        self.broadcast_viewers.append(websocket)
+        logger.info(f"Viewer connected to broadcast, total viewers: {len(self.broadcast_viewers)}")
         
     def disconnect_actor(self, session_id: str):
+        """Disconnect an actor and clean up resources"""
         if session_id in self.actor_connections:
             del self.actor_connections[session_id]
             logger.info(f"Actor disconnected: {session_id}")
+            
+            # If this was the active actor, select another one if available
+            if session_id == self.active_actor_id:
+                remaining_actors = list(self.actor_connections.keys())
+                if remaining_actors:
+                    self.set_active_actor(remaining_actors[0])
+                else:
+                    self.active_actor_id = None
+                    logger.info("No active actors remaining")
             
             # Cancel the processing task
             if session_id in self.processing_tasks:
@@ -120,7 +183,10 @@ class ConnectionManager:
                 del self.frames_processed[session_id]
             
     def disconnect_viewer(self, session_id: str, websocket: WebSocket):
-        if session_id in self.viewer_connections:
+        """Disconnect a viewer using the original session-based method"""
+        if session_id == "broadcast":
+            self.disconnect_broadcast_viewer(websocket)
+        elif session_id in self.viewer_connections:
             try:
                 self.viewer_connections[session_id].remove(websocket)
                 logger.info(f"Viewer disconnected from session: {session_id}, remaining viewers: {len(self.viewer_connections[session_id])}")
@@ -133,33 +199,56 @@ class ConnectionManager:
                 # WebSocket was not in the list
                 pass
     
+    def disconnect_broadcast_viewer(self, websocket: WebSocket):
+        """Disconnect a broadcast viewer"""
+        if websocket in self.broadcast_viewers:
+            self.broadcast_viewers.remove(websocket)
+            logger.info(f"Viewer disconnected from broadcast, remaining viewers: {len(self.broadcast_viewers)}")
+    
     async def receive_frame(self, session_id: str, frame: np.ndarray):
-        """Handle a new frame from an actor"""
-        if session_id not in self.frame_queues:
+        """Handle a new frame from an actor (both for legacy and broadcast)"""
+        if session_id not in self.actor_connections:
             return False
         
         self.frames_received[session_id] += 1
         
-        # Add to queue, replacing any existing frame
-        queue = self.frame_queues[session_id]
-        
-        # Clear the queue to make room for new frame
-        while not queue.empty():
+        # Add to session queue for backward compatibility
+        if session_id in self.frame_queues:
+            queue = self.frame_queues[session_id]
+            
+            # Clear the queue to make room for new frame
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            
+            # Put the new frame
             try:
-                queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
+                await queue.put(frame)
+            except Exception as e:
+                logger.error(f"Error adding frame to queue for session {session_id}: {e}")
         
-        # Put the new frame
-        try:
-            await queue.put(frame)
-            return True
-        except Exception as e:
-            logger.error(f"Error adding frame to queue for session {session_id}: {e}")
-            return False
+        # If this is the active actor, also add to broadcast queue
+        if session_id == self.active_actor_id:
+            # Clear the broadcast queue for new frame
+            while not self.broadcast_queue.empty():
+                try:
+                    self.broadcast_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            
+            # Put the new frame in the broadcast queue
+            try:
+                await self.broadcast_queue.put((session_id, frame))
+                return True
+            except Exception as e:
+                logger.error(f"Error adding frame to broadcast queue for active actor {session_id}: {e}")
+                
+        return False
     
     async def _process_frames_loop(self, session_id: str):
-        """Background task to process frames for a session"""
+        """Background task to process frames for a session (backward compatibility)"""
         try:
             while session_id in self.actor_connections:
                 # Wait for a frame to be available
@@ -170,18 +259,8 @@ class ConnectionManager:
                 queue = self.frame_queues[session_id]
                 
                 try:
-                    # Start timing for queue wait
-                    queue_start_time = time.time()
-                    
                     # Get the next frame from the queue (will wait if queue is empty)
                     frame = await queue.get()
-                    
-                    # Measure queue wait time
-                    queue_time = time.time() - queue_start_time
-                    self._update_metric("queue_time", queue_time * 1000)  # Convert to ms
-                    
-                    # Start timing the entire processing pipeline
-                    total_start_time = time.time()
                     
                     # Get the processor from the server
                     processor = self.frame_processors.get(session_id)
@@ -189,61 +268,25 @@ class ConnectionManager:
                         await asyncio.sleep(0.01)
                         continue
                     
-                    # Process the frame (this is the most time-consuming step)
+                    # Process the frame
                     self.is_processing[session_id] = True
-                    process_start_time = time.time()
                     processed_frame = processor.process_frame(frame)
-                    process_time = time.time() - process_start_time
-                    self._update_metric("process_time", process_time * 1000)  # Convert to ms
                     
                     if processed_frame is not None:
                         # Store the processed frame
                         self.processed_frames[session_id] = processed_frame
                         
                         # Encode the frame to JPEG
-                        encode_start_time = time.time()
                         success, encoded_img = cv2.imencode('.jpg', processed_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
                         if not success:
                             continue
                         binary_img = encoded_img.tobytes()
-                        encode_time = time.time() - encode_start_time
-                        self._update_metric("encode_time", encode_time * 1000)  # Convert to ms
                         
-                        # Send to viewers
-                        send_start_time = time.time()
+                        # Send to viewers of this session
                         await self._send_bytes_to_viewers(binary_img, session_id)
-                        send_time = time.time() - send_start_time
-                        self._update_metric("send_time", send_time * 1000)  # Convert to ms
-                        
-                        # Total time
-                        total_time = time.time() - total_start_time
-                        self._update_metric("total_time", total_time * 1000)  # Convert to ms
                         
                         # Update stats
                         self.frames_processed[session_id] += 1
-                        
-                        # Log performance metrics periodically
-                        current_time = time.time()
-                        if current_time - self.last_metrics_log >= self.metrics_log_interval:
-                            self.last_metrics_log = current_time
-                            avg_metrics = self._calculate_avg_metrics()
-                            
-                            # Calculate average FPS based on processing time
-                            avg_fps = 1000 / avg_metrics["total_time"] if avg_metrics["total_time"] > 0 else 0
-                            
-                            # Log detailed performance info
-                            logger.info(f"Performance metrics - Session {session_id}:")
-                            logger.info(f"  Queue Wait: {avg_metrics['queue_time']:.2f}ms")
-                            logger.info(f"  Processing: {avg_metrics['process_time']:.2f}ms ({avg_metrics['process_time']/avg_metrics['total_time']*100:.1f}%)")
-                            logger.info(f"  JPEG Encode: {avg_metrics['encode_time']:.2f}ms ({avg_metrics['encode_time']/avg_metrics['total_time']*100:.1f}%)")
-                            logger.info(f"  WebSocket Send: {avg_metrics['send_time']:.2f}ms ({avg_metrics['send_time']/avg_metrics['total_time']*100:.1f}%)")
-                            logger.info(f"  Total Time: {avg_metrics['total_time']:.2f}ms (Theoretical max FPS: {avg_fps:.1f})")
-                            
-                            # Log frame counts
-                            dropped = self.frames_received[session_id] - self.frames_processed[session_id]
-                            drop_rate = dropped / self.frames_received[session_id] if self.frames_received[session_id] > 0 else 0
-                            logger.info(f"  Frames: Received {self.frames_received[session_id]}, Processed {self.frames_processed[session_id]}")
-                            logger.info(f"  Dropped: {dropped} frames ({drop_rate:.1%})")
                     
                 except asyncio.CancelledError:
                     # Task is being cancelled
@@ -258,9 +301,107 @@ class ConnectionManager:
             pass
         except Exception as e:
             logger.error(f"Error in process_frames_loop for session {session_id}: {e}")
+    
+    async def _process_broadcast_frames_loop(self):
+        """Background task to process frames for broadcast to all viewers"""
+        try:
+            while True:
+                # Start timing for queue wait
+                queue_start_time = time.time()
+                
+                # Get the next frame from the queue (will wait if queue is empty)
+                actor_id, frame = await self.broadcast_queue.get()
+                
+                # Measure queue wait time
+                queue_time = time.time() - queue_start_time
+                self._update_metric("queue_time", queue_time * 1000)  # Convert to ms
+                
+                # Skip if actor is no longer active
+                if actor_id != self.active_actor_id or actor_id not in self.actor_connections:
+                    continue
+                
+                # Start timing the entire processing pipeline
+                total_start_time = time.time()
+                
+                # Get the processor
+                processor = self.broadcast_processor
+                if not processor:
+                    await asyncio.sleep(0.01)
+                    continue
+                
+                # Process the frame
+                self.is_broadcast_processing = True
+                process_start_time = time.time()
+                processed_frame = processor.process_frame(frame)
+                process_time = time.time() - process_start_time
+                self._update_metric("process_time", process_time * 1000)  # Convert to ms
+                
+                if processed_frame is not None:
+                    # Store the processed frame
+                    self.processed_frames[actor_id] = processed_frame
+                    
+                    # Encode the frame to JPEG
+                    encode_start_time = time.time()
+                    success, encoded_img = cv2.imencode('.jpg', processed_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    if not success:
+                        continue
+                    binary_img = encoded_img.tobytes()
+                    encode_time = time.time() - encode_start_time
+                    self._update_metric("encode_time", encode_time * 1000)  # Convert to ms
+                    
+                    # Send to broadcast viewers
+                    send_start_time = time.time()
+                    await self._send_bytes_to_broadcast_viewers(binary_img)
+                    send_time = time.time() - send_start_time
+                    self._update_metric("send_time", send_time * 1000)  # Convert to ms
+                    
+                    # Total time
+                    total_time = time.time() - total_start_time
+                    self._update_metric("total_time", total_time * 1000)  # Convert to ms
+                    
+                    # Update stats
+                    self.frames_processed[actor_id] += 1
+                    
+                    # Log performance metrics periodically
+                    current_time = time.time()
+                    if current_time - self.last_metrics_log >= self.metrics_log_interval:
+                        self.last_metrics_log = current_time
+                        self._log_performance_metrics(actor_id)
+                
+                self.is_broadcast_processing = False
+                    
+        except asyncio.CancelledError:
+            # Task is being cancelled
+            pass
+        except Exception as e:
+            logger.error(f"Error in broadcast process_frames_loop: {e}")
+            self.is_broadcast_processing = False
+    
+    def _log_performance_metrics(self, actor_id):
+        """Log performance metrics for the active actor"""
+        avg_metrics = self._calculate_avg_metrics()
+        
+        # Calculate average FPS based on processing time
+        avg_fps = 1000 / avg_metrics["total_time"] if avg_metrics["total_time"] > 0 else 0
+        
+        # Log detailed performance info
+        logger.info(f"Performance metrics - Active Actor: {actor_id}")
+        logger.info(f"  Queue Wait: {avg_metrics['queue_time']:.2f}ms")
+        logger.info(f"  Processing: {avg_metrics['process_time']:.2f}ms ({avg_metrics['process_time']/avg_metrics['total_time']*100:.1f}%)")
+        logger.info(f"  JPEG Encode: {avg_metrics['encode_time']:.2f}ms ({avg_metrics['encode_time']/avg_metrics['total_time']*100:.1f}%)")
+        logger.info(f"  WebSocket Send: {avg_metrics['send_time']:.2f}ms ({avg_metrics['send_time']/avg_metrics['total_time']*100:.1f}%)")
+        logger.info(f"  Total Time: {avg_metrics['total_time']:.2f}ms (Theoretical max FPS: {avg_fps:.1f})")
+        
+        # Log frame counts
+        if actor_id in self.frames_received and actor_id in self.frames_processed:
+            dropped = self.frames_received[actor_id] - self.frames_processed[actor_id]
+            drop_rate = dropped / self.frames_received[actor_id] if self.frames_received[actor_id] > 0 else 0
+            logger.info(f"  Frames: Received {self.frames_received[actor_id]}, Processed {self.frames_processed[actor_id]}")
+            logger.info(f"  Dropped: {dropped} frames ({drop_rate:.1%})")
+            logger.info(f"  Broadcast Viewers: {len(self.broadcast_viewers)}")
             
     async def _send_bytes_to_viewers(self, binary_data: bytes, session_id: str):
-        """Send binary data to all connected viewers for a specific session"""
+        """Send binary data to all connected viewers for a specific session (backward compatibility)"""
         if session_id not in self.viewer_connections or not self.viewer_connections[session_id]:
             # Even if there are no viewers, still send back to the actor for preview
             if session_id in self.actor_connections:
@@ -281,7 +422,11 @@ class ConnectionManager:
         
         # Remove any disconnected viewers
         for websocket in disconnected_viewers:
-            self.viewer_connections[session_id].remove(websocket)
+            try:
+                self.viewer_connections[session_id].remove(websocket)
+            except ValueError:
+                # WebSocket might have been removed already
+                pass
             
         # Always send back to the actor for preview
         if session_id in self.actor_connections:
@@ -289,30 +434,107 @@ class ConnectionManager:
                 await self.actor_connections[session_id].send_bytes(binary_data)
             except Exception as e:
                 logger.error(f"Error sending preview to actor in session {session_id}: {e}")
-
-    # New method to send notifications to viewers when source is switched
-    async def notify_viewers_source_switched(self, session_id: str, source_index: int, source_name: str):
-        """Notify all viewers that the source image has been switched"""
-        if session_id not in self.viewer_connections:
+                
+    async def _send_bytes_to_broadcast_viewers(self, binary_data: bytes):
+        """Send binary data to all broadcast viewers"""
+        if not self.broadcast_viewers:
+            # Even if there are no viewers, still send back to the active actor for preview
+            if self.active_actor_id and self.active_actor_id in self.actor_connections:
+                try:
+                    await self.actor_connections[self.active_actor_id].send_bytes(binary_data)
+                except Exception as e:
+                    logger.error(f"Error sending preview to active actor {self.active_actor_id}: {e}")
             return
             
+        # Send to all broadcast viewers
+        disconnected_viewers = []
+        for viewer_websocket in self.broadcast_viewers:
+            try:
+                await viewer_websocket.send_bytes(binary_data)
+            except Exception as e:
+                logger.error(f"Error sending to broadcast viewer: {e}")
+                disconnected_viewers.append(viewer_websocket)
+        
+        # Remove any disconnected viewers
+        for websocket in disconnected_viewers:
+            try:
+                self.broadcast_viewers.remove(websocket)
+            except ValueError:
+                # WebSocket might have been removed already
+                pass
+            
+        # Always send back to the active actor for preview
+        if self.active_actor_id and self.active_actor_id in self.actor_connections:
+            try:
+                await self.actor_connections[self.active_actor_id].send_bytes(binary_data)
+            except Exception as e:
+                logger.error(f"Error sending preview to active actor {self.active_actor_id}: {e}")
+
+    async def notify_viewers_source_switched(self, session_id: str, source_index: int, source_name: str):
+        """Notify all viewers that the source image has been switched (legacy method)"""
+        # Notify session viewers (backward compatibility)
+        if session_id in self.viewer_connections:
+            message = {
+                "status": "source_switched", 
+                "current_source": source_index,
+                "source_name": source_name
+            }
+            
+            disconnected_viewers = []
+            for viewer_websocket in self.viewer_connections[session_id]:
+                try:
+                    await viewer_websocket.send_json(message)
+                except Exception as e:
+                    logger.error(f"Error sending source switch notification to viewer in session {session_id}: {e}")
+                    disconnected_viewers.append(viewer_websocket)
+                    
+            # Remove any disconnected viewers
+            for websocket in disconnected_viewers:
+                try:
+                    self.viewer_connections[session_id].remove(websocket)
+                except ValueError:
+                    pass
+        
+        # Also notify broadcast viewers with the actor ID who made the change
+        await self.notify_broadcast_source_switched(source_index, source_name, session_id)
+                
+    async def notify_broadcast_source_switched(self, source_index: int, source_name: str, actor_id: str):
+        """Notify all broadcast viewers that the source image has been switched"""
         message = {
             "status": "source_switched", 
             "current_source": source_index,
-            "source_name": source_name
+            "source_name": source_name,
+            "actor_id": actor_id
         }
         
         disconnected_viewers = []
-        for viewer_websocket in self.viewer_connections[session_id]:
+        for viewer_websocket in self.broadcast_viewers:
             try:
                 await viewer_websocket.send_json(message)
             except Exception as e:
-                logger.error(f"Error sending source switch notification to viewer in session {session_id}: {e}")
+                logger.error(f"Error sending source switch notification to broadcast viewer: {e}")
                 disconnected_viewers.append(viewer_websocket)
                 
         # Remove any disconnected viewers
         for websocket in disconnected_viewers:
-            self.viewer_connections[session_id].remove(websocket)
+            try:
+                self.broadcast_viewers.remove(websocket)
+            except ValueError:
+                pass
+            
+        # Also notify other actors that aren't the one who made the change
+        for other_actor_id, websocket in self.actor_connections.items():
+            if other_actor_id != actor_id:
+                try:
+                    await websocket.send_json({
+                        "status": "source_switched_by_other",
+                        "current_source": source_index,
+                        "source_name": source_name,
+                        "actor_id": actor_id,
+                        "is_active": actor_id == self.active_actor_id
+                    })
+                except Exception as e:
+                    logger.error(f"Error notifying actor {other_actor_id} of source switch: {e}")
 
     def _update_metric(self, metric_name, value):
         """Update a performance metric, maintaining a rolling average"""
@@ -672,16 +894,8 @@ class Server:
         self._setup_routes()
         self._setup_middleware()
         
-        # Try to initialize FasterLivePortrait processor, fall back to basic if it fails
+        # Try to initialize FasterLivePortrait processor
         try:
-            if config.use_basic_processor:
-                logger.info("Basic processor requested via command line argument")
-                raise ValueError("Basic processor explicitly requested")
-            
-            if not FASTER_LIVE_PORTRAIT_AVAILABLE:
-                logger.error("FasterLivePortrait modules couldn't be imported")
-                raise ImportError("FasterLivePortrait is not available")
-            
             # Check if config path exists
             if not os.path.isfile(config.config_path):
                 logger.error(f"Config file {config.config_path} not found")
@@ -719,50 +933,18 @@ class Server:
             logger.info(f"Config: {config.config_path}")
             logger.info(f"Is animal model: {config.is_animal}")
             
-            try:
-                # Handle transparency in source images
-                for i, path in enumerate(source_images):
-                    # Check if the image has an alpha channel (transparency)
-                    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
-                    if img is not None and img.shape[-1] == 4:
-                        # Image has alpha channel
-                        logger.info(f"Source image {i+1} has transparency. Replacing transparent pixels with green.")
-                        # Create a green background (BGR format)
-                        green_background = np.ones((img.shape[0], img.shape[1], 3), dtype=np.uint8) * np.array([0, 255, 0], dtype=np.uint8)
-                        # Extract alpha channel
-                        alpha = img[:, :, 3] / 255.0
-                        # Convert to 3 channels (drop alpha)
-                        rgb = img[:, :, :3]
-                        # Alpha blend with green background
-                        result = (rgb * alpha[:, :, np.newaxis] + green_background * (1 - alpha[:, :, np.newaxis])).astype(np.uint8)
-                        # Save back to the file
-                        cv2.imwrite(path, result)
-                        logger.info(f"Updated source image {i+1} with transparent pixels replaced by green")
-                
-                self.processor = FasterLivePortraitProcessor(
-                    config_path=config.config_path,
-                    src_image_path=config.source_image,
-                    src_image_2_path=config.source_image_2 if config.source_image_2 and os.path.isfile(config.source_image_2) else None,
-                    src_image_3_path=config.source_image_3 if config.source_image_3 and os.path.isfile(config.source_image_3) else None,
-                    src_image_4_path=config.source_image_4 if config.source_image_4 and os.path.isfile(config.source_image_4) else None,
-                    is_animal=config.is_animal,
-                    debug=config.debug,
-                )
-                logger.info(f"Successfully initialized FasterLivePortrait processor with {len(source_images)} source images")
-                
-                # Determine if multiple sources are available
-                self.has_multiple_sources = len(source_images) > 1
-                if self.has_multiple_sources:
-                    logger.info(f"Multiple source images available: {len(source_images)}")
-                    
-            except Exception as processor_error:
-                logger.error(f"Error initializing FasterLivePortrait processor: {type(processor_error).__name__}: {processor_error}")
-                # Try to provide more detailed error information
-                if hasattr(processor_error, "__traceback__"):
-                    import traceback
-                    tb_str = "".join(traceback.format_exception(None, processor_error, processor_error.__traceback__))
-                    logger.error(f"Traceback:\n{tb_str}")
-                raise
+            self.processor = FasterLivePortraitProcessor(
+                config_path=config.config_path,
+                src_image_path=config.source_image,
+                src_image_2_path=config.source_image_2 if config.source_image_2 and os.path.isfile(config.source_image_2) else None,
+                src_image_3_path=config.source_image_3 if config.source_image_3 and os.path.isfile(config.source_image_3) else None,
+                src_image_4_path=config.source_image_4 if config.source_image_4 and os.path.isfile(config.source_image_4) else None,
+                is_animal=config.is_animal,
+                debug=config.debug,
+            )
+            
+            # Set processor for broadcast
+            self.connection_manager.broadcast_processor = self.processor
             
         except Exception as e:
             logger.error(f"Failed to initialize FasterLivePortrait processor: {e}")
@@ -784,27 +966,27 @@ class Server:
         
         @self.app.post("/create_session")
         async def create_session(request: dict = Body(...)):
-            """Create a new session ID or validate an existing one"""
-            # Allow custom session ID if provided, otherwise generate one
-            session_id = request.get("session_id", str(uuid.uuid4()))
+            """Create a new actor ID"""
+            actor_id = str(uuid.uuid4())
             return {
-                "session_id": session_id,
+                "actor_id": actor_id,
                 "status": "success"
             }
             
-        @self.app.websocket("/ws/actor/{session_id}")
-        async def actor_websocket(websocket: WebSocket, session_id: str):
+        @self.app.websocket("/ws/actor/{actor_id}")
+        async def actor_websocket(websocket: WebSocket, actor_id: str):
             """WebSocket endpoint for actors to stream video frames"""
             try:
-                await self.connection_manager.connect_actor(session_id, websocket)
+                await self.connection_manager.connect_actor(actor_id, websocket)
                 
-                # Register the processor for this session
-                self.connection_manager.frame_processors[session_id] = self.processor
+                # Register the processor for this session (for backward compatibility)
+                self.connection_manager.frame_processors[actor_id] = self.processor
                 
                 # Send a confirmation to the actor
                 response = {
                     "status": "connected", 
-                    "session_id": session_id
+                    "actor_id": actor_id,
+                    "is_active": actor_id == self.connection_manager.active_actor_id
                 }
                 
                 # Add info about multiple sources if available
@@ -813,7 +995,7 @@ class Server:
                     response["has_multiple_sources"] = True
                     response["source_count"] = source_count
                     response["sources"] = [os.path.basename(path) for path in self.processor.src_image_paths]
-                    response["current_source"] = 0
+                    response["current_source"] = self.processor.current_source_index
                 
                 await websocket.send_json(response)
                 
@@ -834,9 +1016,12 @@ class Server:
                             
                             # Handle source switching commands
                             if command.get("action") == "switch_source" and hasattr(self, 'has_multiple_sources') and self.has_multiple_sources:
-                                # Check if we should process this key press (prevent too frequent switching)
+                                # Check if we should process this key press
                                 if current_time - last_key_press_time >= key_press_cooldown:
                                     last_key_press_time = current_time
+                                    
+                                    # Make this actor active when they change the source
+                                    self.connection_manager.set_active_actor(actor_id)
                                     
                                     # Get the requested source index
                                     index = command.get("index")
@@ -846,42 +1031,50 @@ class Server:
                                     elif 0 <= index < len(self.processor.src_image_paths):
                                         # Switch to the requested source
                                         new_index = self.processor.switch_source(index)
+                                    else:
+                                        continue  # Invalid index
                                     
                                     # Send confirmation back to actor
                                     await websocket.send_json({
                                         "status": "source_switched",
                                         "current_source": new_index,
-                                        "source_name": os.path.basename(self.processor.src_image_paths[new_index])
+                                        "source_name": os.path.basename(self.processor.src_image_paths[new_index]),
+                                        "is_active": True
                                     })
                                     
                                     # Notify viewers about the source switch
                                     await self.connection_manager.notify_viewers_source_switched(
-                                        session_id, new_index, os.path.basename(self.processor.src_image_paths[new_index])
+                                        actor_id, new_index, os.path.basename(self.processor.src_image_paths[new_index])
                                     )
                                     
                             # Handle key press events for source switching
                             elif command.get("action") == "key_press" and hasattr(self, 'has_multiple_sources') and self.has_multiple_sources:
                                 key = command.get("key")
-                                # Check if we should process this key press (prevent too frequent switching)
+                                # Check if we should process this key press
                                 if current_time - last_key_press_time >= key_press_cooldown:
                                     last_key_press_time = current_time
                                     
-                                    # Number keys 1-3 for source switching
-                                    if key in ["1", "2", "3"]:
+                                    # Number keys 1-4 for source switching
+                                    if key in ["1", "2", "3", "4"]:
                                         index = int(key) - 1
                                         if 0 <= index < len(self.processor.src_image_paths):
+                                            # Make this actor active
+                                            self.connection_manager.set_active_actor(actor_id)
+                                            
+                                            # Switch to the requested source
                                             new_index = self.processor.switch_source(index)
                                             
                                             # Send confirmation back to actor
                                             await websocket.send_json({
                                                 "status": "source_switched",
                                                 "current_source": new_index,
-                                                "source_name": os.path.basename(self.processor.src_image_paths[new_index])
+                                                "source_name": os.path.basename(self.processor.src_image_paths[new_index]),
+                                                "is_active": True
                                             })
                                             
                                             # Notify viewers about the source switch
                                             await self.connection_manager.notify_viewers_source_switched(
-                                                session_id, new_index, os.path.basename(self.processor.src_image_paths[new_index])
+                                                actor_id, new_index, os.path.basename(self.processor.src_image_paths[new_index])
                                             )
                                             
                         except json.JSONDecodeError:
@@ -899,18 +1092,18 @@ class Server:
                         
                         if frame is not None:
                             # Add frame to processing queue (will replace any pending frame)
-                            await self.connection_manager.receive_frame(session_id, frame)
+                            await self.connection_manager.receive_frame(actor_id, frame)
                     
             except WebSocketDisconnect:
-                self.connection_manager.disconnect_actor(session_id)
-                logger.info(f"Actor disconnected: {session_id}")
+                self.connection_manager.disconnect_actor(actor_id)
+                logger.info(f"Actor disconnected: {actor_id}")
             except Exception as e:
                 logger.error(f"Error in actor websocket: {e}")
-                self.connection_manager.disconnect_actor(session_id)
+                self.connection_manager.disconnect_actor(actor_id)
             
         @self.app.websocket("/ws/viewer/{session_id}")
         async def viewer_websocket(websocket: WebSocket, session_id: str):
-            """WebSocket endpoint for viewers to receive processed frames"""
+            """WebSocket endpoint for viewers to receive processed frames (backward compatibility)"""
             try:
                 await self.connection_manager.connect_viewer(session_id, websocket)
                 
@@ -936,6 +1129,34 @@ class Server:
             except Exception as e:
                 logger.error(f"Error in viewer websocket: {e}")
                 self.connection_manager.disconnect_viewer(session_id, websocket)
+                
+        @self.app.websocket("/ws/viewer")
+        async def broadcast_viewer_websocket(websocket: WebSocket):
+            """WebSocket endpoint for viewers to receive the broadcast stream"""
+            try:
+                await self.connection_manager.connect_broadcast_viewer(websocket)
+                
+                # Send confirmation to the viewer
+                await websocket.send_json({
+                    "status": "connected", 
+                    "message": "Connected to broadcast stream. Waiting for video..."
+                })
+                
+                # Keep the connection open, wait for heartbeats from the client
+                while True:
+                    # This will wait for any message from the client (like heartbeats)
+                    message = await websocket.receive_text()
+                    
+                    # If it's a heartbeat, respond
+                    if message == "heartbeat":
+                        await websocket.send_json({"status": "heartbeat_ack"})
+                    
+            except WebSocketDisconnect:
+                self.connection_manager.disconnect_broadcast_viewer(websocket)
+                logger.info("Viewer disconnected from broadcast")
+            except Exception as e:
+                logger.error(f"Error in broadcast viewer websocket: {e}")
+                self.connection_manager.disconnect_broadcast_viewer(websocket)
         
         # Serve static files
         self.app.mount("/frontend", StaticFiles(directory="frontend"), name="frontend")
