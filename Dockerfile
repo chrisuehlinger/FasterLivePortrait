@@ -6,6 +6,9 @@ WORKDIR /root/FasterLivePortrait
 
 RUN pip install -r requirements.txt
 
+COPY ./src/models/XPose /root/FasterLivePortrait/src/models/XPose
+
+
 # Setup frontend
 # WORKDIR /root/FasterLivePortrait/frontend
 # COPY ./frontend/package.json /root/FasterLivePortrait/frontend/package.json

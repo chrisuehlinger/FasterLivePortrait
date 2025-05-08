@@ -13,6 +13,10 @@ else
   echo "Warning: requirements.txt not found."
 fi
 
+pushd /workspaces/FasterLivePortrait/src/models/XPose/models/UniPose/ops
+python setup.py build install
+popd
+
 # Check for NVIDIA GPU
 echo "Checking NVIDIA GPU..."
 nvidia-smi || echo "Warning: NVIDIA GPU not detected or driver issue"
