@@ -867,7 +867,7 @@ class Server:
                                     last_key_press_time = current_time
                                     
                                     # Number keys 1-3 for source switching
-                                    if key in ["1", "2", "3"]:
+                                    if key in ["1", "2", "3", "4"]:
                                         index = int(key) - 1
                                         if 0 <= index < len(self.processor.src_image_paths):
                                             new_index = self.processor.switch_source(index)
