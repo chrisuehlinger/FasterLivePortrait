@@ -30,6 +30,23 @@ popd
 #  --cfg configs/trt_infer.yaml \
 #  --animal
 
+# Start the proxying target server on port 9090
+echo "Starting proxy target server on port 9090..."
+python websocket_server.py \
+  --port 9090 \
+  --host 0.0.0.0 \
+  --config-path configs/trt_infer.yaml \
+  --source-image assets/examples/source/ahau-kin.png \
+  --source-image-2 assets/examples/source/ix-chel.png \
+  --source-image-3 assets/examples/source/chac-bolay-head.png \
+  --is-animal &
+
+# Wait for the target server to initialize
+sleep 5
+
+# Start the main server on port 8080 with proxying to port 9090
+# This server will proxy source images 1 and 2 to the server on port 9090
+echo "Starting main server with proxy on port 8080..."
 python websocket_server.py \
   --port 8080 \
   --host 0.0.0.0 \
@@ -38,6 +55,10 @@ python websocket_server.py \
   --source-image-2 assets/examples/source/ix-chel.png \
   --source-image-3 assets/examples/source/chac-bolay-head.png \
   --source-image-4 assets/examples/source/ahau-kin.png \
-  --is-animal \
   --ssl-cert certs/cert.pem \
-  --ssl-key certs/key.pem
+  --ssl-key certs/key.pem \
+  --proxy-target localhost:9090 \
+  --proxy-sources 3
+
+# Keep the script running
+wait
