@@ -12,7 +12,8 @@ export default defineConfig({
     rollupOptions: {
       input: {
         actor: resolve(__dirname, 'src/actor.html'),
-        viewer: resolve(__dirname, 'src/viewer.html')
+        director: resolve(__dirname, 'src/director.html'),
+        viewer: resolve(__dirname, 'src/viewer.html'),
       }
     }
   }

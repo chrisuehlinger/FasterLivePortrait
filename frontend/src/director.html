@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FasterLivePortrait - Actor Streaming</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            background-color: #f0f0f0;
+            color: #333;
+            margin: 0 auto;
+        }
+
+        .container {
+            display: flex;
+            flex-wrap: wrap;
+            height: 100vh;
+            background-color: #f0f0f0;
+        }
+        button {
+          flex-basis: 50%;
+          font-size: 128px;
+          color: white;
+        }
+    </style>
+</head>
+<body>
+
+  <div class="container">
+    <button id="ahaukin" style="background-color: goldenrod;" onclick="sendCommand(0)">AHAU-KIN</button>
+    <button id="ixchel" style="background-color: blue;" onclick="sendCommand(1)">IX-CHEL</button>
+    <button id="chacbolay" style="background-color: red;" onclick="sendCommand(2)">CHAC-BOLAY</button>
+    <button id="off" style="background-color: black;" onclick="sendCommand(3)">OFF</button>
+    </div> 
+
+    <script>
+        // Configuration
+        const SERVER_URL = window.location.hostname + ":" + window.location.port;
+        const USE_SSL = window.location.protocol === 'https:';
+        const API_URL = `${USE_SSL ? 'https' : 'http'}://${SERVER_URL}`;
+
+        const buttons = {
+            ahaukin: document.getElementById('ahaukin'),
+            ixchel: document.getElementById('ixchel'),
+            chacbolay: document.getElementById('chacbolay'),
+            off: document.getElementById('off')
+        };
+
+        function sendCommand(index) {
+            fetch(`${API_URL}/switch_source/performer1/${index}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ index: index })
+            })
+            .then(response => response.json())
+            .then(data => console.log('Success:', data))
+            .catch((error) => console.error('Error:', error));
+        }
+
+    </script>
+</body>
+</html>

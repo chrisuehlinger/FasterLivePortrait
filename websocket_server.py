@@ -41,6 +41,7 @@ logger = logging.getLogger("websocket_server")
 class ConnectionManager:
     def __init__(self):
         self.actor_connections: Dict[str, WebSocket] = {}
+        self.director_connections: Dict[str, WebSocket] = {}
         self.viewer_connections: Dict[str, List[WebSocket]] = {}
         self.frame_queues: Dict[str, asyncio.Queue] = {}
         self.processed_frames: Dict[str, np.ndarray] = {}
@@ -89,6 +90,17 @@ class ConnectionManager:
         self.viewer_connections[session_id].append(websocket)
         logger.info(f"Viewer connected to session: {session_id}, total viewers: {len(self.viewer_connections[session_id])}")
         
+    async def connect_director(self, session_id: str, websocket: WebSocket):
+        await websocket.accept()
+        
+        # Initialize list for this session if it doesn't exist
+        if session_id not in self.director_connections:
+            self.director_connections[session_id] = []
+            
+        # Add this viewer to the session's viewers
+        self.director_connections[session_id].append(websocket)
+        logger.info(f"Director connected to session: {session_id}, total directors: {len(self.director_connections[session_id])}")
+        
     def disconnect_actor(self, session_id: str):
         if session_id in self.actor_connections:
             del self.actor_connections[session_id]
@@ -118,6 +130,20 @@ class ConnectionManager:
                 del self.frames_received[session_id]
             if session_id in self.frames_processed:
                 del self.frames_processed[session_id]
+            
+    def disconnect_director(self, session_id: str, websocket: WebSocket):
+        if session_id in self.director_connections:
+            try:
+                self.director_connections[session_id].remove(websocket)
+                logger.info(f"Viewer disconnected from session: {session_id}, remaining directors: {len(self.director_connections[session_id])}")
+                
+                # Remove the session entry if no more directors
+                if not self.director_connections[session_id]:
+                    del self.director_connections[session_id]
+                    
+            except ValueError:
+                # WebSocket was not in the list
+                pass
             
     def disconnect_viewer(self, session_id: str, websocket: WebSocket):
         if session_id in self.viewer_connections:
@@ -313,6 +339,30 @@ class ConnectionManager:
         # Remove any disconnected viewers
         for websocket in disconnected_viewers:
             self.viewer_connections[session_id].remove(websocket)
+
+    # New method to send notifications to viewers when source is switched
+    async def notify_actors_source_switched(self, session_id: str, source_index: int, source_name: str):
+        """Notify all actors that the source image has been switched"""
+        if session_id not in self.actor_connections:
+            return
+            
+        message = {
+            "status": "source_switched", 
+            "current_source": source_index,
+            "source_name": source_name
+        }
+        
+        disconnected_actors = []
+        for actor_websocket in self.actor_connections[session_id]:
+            try:
+                await actor_websocket.send_json(message)
+            except Exception as e:
+                logger.error(f"Error sending source switch notification to actor in session {session_id}: {e}")
+                disconnected_actors.append(actor_websocket)
+                
+        # Remove any disconnected actors
+        for websocket in disconnected_actors:
+            self.actor_connections[session_id].remove(websocket)
 
     def _update_metric(self, metric_name, value):
         """Update a performance metric, maintaining a rolling average"""
@@ -791,6 +841,28 @@ class Server:
                 "session_id": session_id,
                 "status": "success"
             }
+        
+        @self.app.post("/switch_source/{session_id}/{index}")
+        async def switch_source(request: dict = Body(...)):
+            # Allow custom session ID if provided, otherwise generate one
+            session_id = request.get("session_id", str(uuid.uuid4()))
+            index = request.get("index", 0)
+            self.processor.switch_source(index)
+                                            
+            # Notify viewers about the source switch
+            await self.connection_manager.notify_viewers_source_switched(
+                session_id, index, os.path.basename(self.processor.src_image_paths[index])
+            )
+                                            
+            # Notify actors about the source switch
+            await self.connection_manager.notify_actors_source_switched(
+                session_id, index, os.path.basename(self.processor.src_image_paths[index])
+            )
+
+            return {
+                "session_id": session_id,
+                "status": "success"
+            }
             
         @self.app.websocket("/ws/actor/{session_id}")
         async def actor_websocket(websocket: WebSocket, session_id: str):
@@ -907,7 +979,36 @@ class Server:
             except Exception as e:
                 logger.error(f"Error in actor websocket: {e}")
                 self.connection_manager.disconnect_actor(session_id)
-            
+                    
+        @self.app.websocket("/ws/viewer/{session_id}")
+        async def director_websocket(websocket: WebSocket, session_id: str):
+            """WebSocket endpoint for directors to send"""
+            try:
+                await self.connection_manager.connect_director(session_id, websocket)
+                
+                # Send confirmation to the director
+                await websocket.send_json({
+                    "status": "connected", 
+                    "session_id": session_id,
+                    "message": "Connected to stream. Waiting for video..."
+                })
+                
+                # Keep the connection open, wait for heartbeats from the client
+                while True:
+                    # This will wait for any message from the client (like heartbeats)
+                    message = await websocket.receive_text()
+                    
+                    # If it's a heartbeat, respond
+                    if message == "heartbeat":
+                        await websocket.send_json({"status": "heartbeat_ack"})
+                    
+            except WebSocketDisconnect:
+                self.connection_manager.disconnect_director(session_id, websocket)
+                logger.info(f"Director disconnected from session: {session_id}")
+            except Exception as e:
+                logger.error(f"Error in director websocket: {e}")
+                self.connection_manager.disconnect_director(session_id, websocket)
+
         @self.app.websocket("/ws/viewer/{session_id}")
         async def viewer_websocket(websocket: WebSocket, session_id: str):
             """WebSocket endpoint for viewers to receive processed frames"""
