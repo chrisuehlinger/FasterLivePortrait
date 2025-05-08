@@ -622,7 +622,7 @@
                 
                 // Convert canvas to JPEG blob with quality setting
                 const blobStartTime = performance.now();
-                const jpegQuality = 0.1; // Lower quality for better performance (was 0.7)
+                const jpegQuality = 0.5; // Lower quality for better performance (was 0.7)
                 
                 // Track when blob conversion completes
                 canvasElement.toBlob((blob) => {
@@ -875,6 +875,7 @@ Compression Quality: 70%`;
             if (sessionFromUrl) {
                 sessionIdInput.value = sessionFromUrl;
             }
+            startCamera();
         });
         
         // Handle page unload
@@ -882,7 +883,6 @@ Compression Quality: 70%`;
             disconnect();
         });
 
-        startCamera();
     </script>
 </body>
 </html>

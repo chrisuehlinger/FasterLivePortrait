@@ -980,7 +980,7 @@ class Server:
                 logger.error(f"Error in actor websocket: {e}")
                 self.connection_manager.disconnect_actor(session_id)
                     
-        @self.app.websocket("/ws/viewer/{session_id}")
+        @self.app.websocket("/ws/director/{session_id}")
         async def director_websocket(websocket: WebSocket, session_id: str):
             """WebSocket endpoint for directors to send"""
             try:

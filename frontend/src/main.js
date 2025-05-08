@@ -67,7 +67,7 @@ const keyLuminosities = keyColors.map(color => {
 const characterScales = [
     0.85,  
     0.5,
-    0.5,
+    1,
     0.1,  
 ];
 const characterTopOffsets = [
