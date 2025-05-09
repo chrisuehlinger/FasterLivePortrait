@@ -11,13 +11,17 @@
             background-color: #f0f0f0;
             color: #333;
             margin: 0 auto;
+            position: fixed;
+            width: 100vw;
+            height: 100vh;
+
         }
 
         .container {
             display: flex;
             flex-wrap: wrap;
-            height: 100vh;
             background-color: #f0f0f0;
+            height: 80vh;
         }
         button {
           flex-basis: 50%;
@@ -28,12 +32,14 @@
         .controls-row {
             display: flex;
             width: 100%;
-            height: 15vh;
+            height: 10vh;
             background-color: #333;
         }
         
         .pause-button {
             flex-basis: 100%;
+            height: 10vh;
+            width: 100vw;
             font-size: 48px;
             background-color: #555;
             border: none;
@@ -44,6 +50,33 @@
         
         .pause-button.paused {
             background-color: #f44336;
+        }
+        
+        .intensity-control {
+            display: flex;
+            width: 100%;
+            height: 10vh;
+            background-color: #222;
+            padding: 10px;
+            align-items: center;
+            color: white;
+        }
+        
+        .intensity-slider {
+            flex-grow: 1;
+            margin: 0 20px;
+            height: 30px;
+        }
+        
+        .intensity-value {
+            width: 60px;
+            text-align: center;
+            font-size: 24px;
+        }
+        
+        .intensity-label {
+            font-size: 24px;
+            width: 180px;
         }
     </style>
 </head>
@@ -56,6 +89,12 @@
     <button id="off" style="background-color: black;" onclick="sendCommand(3)">OFF</button>
   </div>
   
+  <div class="intensity-control">
+    <div class="intensity-label">INTENSITY:</div>
+    <input type="range" id="intensitySlider" class="intensity-slider" min="0" max="100" value="100" step="1" value="0">
+    <div id="intensityValue" class="intensity-value">0.0</div>
+  </div>
+  
   <div class="controls-row">
     <button id="pauseButton" class="pause-button" onclick="togglePause()">PAUSE ANIMATION</button>
   </div>
@@ -65,6 +104,15 @@
         const SERVER_URL = window.location.hostname + ":" + window.location.port;
         const USE_SSL = window.location.protocol === 'https:';
         const API_URL = `${USE_SSL ? 'https' : 'http'}://${SERVER_URL}`;
+        const WS_URL = `${USE_SSL ? 'wss' : 'ws'}://${SERVER_URL}`;
+        
+        // Session ID (fixed for this app)
+        const SESSION_ID = 'performer1';
+        
+        // WebSocket connection for director
+        let socket;
+        let reconnectTimer = null;
+        let heartbeatInterval = null;
 
         const buttons = {
             ahaukin: document.getElementById('ahaukin'),
@@ -76,6 +124,10 @@
         // Pause state tracking
         let isPaused = false;
         const pauseButton = document.getElementById('pauseButton');
+        
+        // Intensity control elements
+        const intensitySlider = document.getElementById('intensitySlider');
+        const intensityValue = document.getElementById('intensityValue');
 
         function sendCommand(index) {
             fetch(`${API_URL}/switch_source/performer1/${index}`, {
@@ -114,6 +166,88 @@
             .then(data => console.log('Pause state changed:', data))
             .catch((error) => console.error('Error toggling pause:', error));
         }
+        
+        // Initialize WebSocket connection
+        function connectWebSocket() {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                return;
+            }
+            
+            console.log(`Connecting to WebSocket at ${WS_URL}/ws/director/${SESSION_ID}`);
+            socket = new WebSocket(`${WS_URL}/ws/director/${SESSION_ID}`);
+            
+            socket.onopen = function() {
+                console.log('WebSocket connected');
+                if (reconnectTimer) {
+                    clearTimeout(reconnectTimer);
+                    reconnectTimer = null;
+                }
+                
+                // Start heartbeat to keep connection alive
+                if (heartbeatInterval) {
+                    clearInterval(heartbeatInterval);
+                }
+                heartbeatInterval = setInterval(() => {
+                    if (socket.readyState === WebSocket.OPEN) {
+                        socket.send("heartbeat");
+                    }
+                }, 30000); // 30 seconds
+            };
+            
+            socket.onclose = function() {
+                console.log('WebSocket disconnected');
+                if (heartbeatInterval) {
+                    clearInterval(heartbeatInterval);
+                    heartbeatInterval = null;
+                }
+                
+                // Try to reconnect after 3 seconds
+                if (!reconnectTimer) {
+                    reconnectTimer = setTimeout(connectWebSocket, 3000);
+                }
+            };
+            
+            socket.onerror = function(error) {
+                console.error('WebSocket error:', error);
+            };
+            
+            socket.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log('Received WebSocket message:', data);
+                    
+                    // Handle intensity updates from other clients
+                    if (data.action === 'intensity_update' && data.initiator !== 'director') {
+                        const intensity = parseFloat(data.value);
+                        intensitySlider.value = Math.round(intensity * 100);
+                        intensityValue.textContent = intensity.toFixed(1);
+                    }
+                } catch (e) {
+                    console.error('Error parsing WebSocket message:', e);
+                }
+            };
+        }
+        
+        // Send intensity update over WebSocket
+        function sendIntensityUpdate(value) {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({
+                    action: 'intensity_update',
+                    value: value,
+                    initiator: 'director'
+                }));
+            }
+        }
+        
+        // Initialize intensity slider
+        intensitySlider.addEventListener('input', function() {
+            const intensity = this.value / 100;
+            intensityValue.textContent = intensity.toFixed(1);
+            sendIntensityUpdate(intensity);
+        });
+        
+        // Connect WebSocket on page load
+        window.addEventListener('load', connectWebSocket);
     </script>
 </body>
 </html>

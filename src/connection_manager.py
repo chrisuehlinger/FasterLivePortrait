@@ -4,6 +4,7 @@ import numpy as np
 import time
 from typing import Dict, List, Set
 import logging
+import json
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("connection_manager")
@@ -42,6 +43,9 @@ class ConnectionManager:
         self.proxy_connections: Dict[str, ProxyConnection] = {}  # session_id -> ProxyConnection
         self.proxy_sources: Dict[str, Set[int]] = {}  # session_id -> {source_indices}
         self.current_proxy_active: Dict[str, bool] = {}  # session_id -> bool
+
+        # New attribute to store the latest intensity value for each session
+        self.animation_intensity: Dict[str, float] = {}
     
     async def connect_actor(self, session_id: str, websocket: WebSocket):
         await websocket.accept()
@@ -453,6 +457,60 @@ class ConnectionManager:
         # Remove any disconnected actors
         for websocket in disconnected_actors:
             self.actor_connections[session_id].remove(websocket)
+
+    async def broadcast_message(self, session_id: str, message: dict, exclude_websocket=None):
+        """Broadcast a message to all connected clients for a session"""
+        try:
+            message_json = json.dumps(message)
+            
+            # Send to all viewers
+            if session_id in self.viewer_connections:
+                for websocket in self.viewer_connections[session_id]:
+                    if websocket != exclude_websocket:
+                        try:
+                            await websocket.send_text(message_json)
+                        except Exception as e:
+                            logger.error(f"Error sending message to viewer in session {session_id}: {e}")
+            
+            # Send to actor
+            if session_id in self.actor_connections:
+                if self.actor_connections[session_id] != exclude_websocket:
+                    try:
+                        await self.actor_connections[session_id].send_text(message_json)
+                    except Exception as e:
+                        logger.error(f"Error sending message to actor in session {session_id}: {e}")
+            
+            # Send to directors
+            if session_id in self.director_connections:
+                for websocket in self.director_connections[session_id]:
+                    if websocket != exclude_websocket:
+                        try:
+                            await websocket.send_text(message_json)
+                        except Exception as e:
+                            logger.error(f"Error sending message to director in session {session_id}: {e}")
+                            
+        except Exception as e:
+            logger.error(f"Error broadcasting message for session {session_id}: {e}")
+    
+    async def handle_intensity_update(self, session_id: str, intensity: float, websocket: WebSocket):
+        """Handle an intensity update from any client and broadcast to all others"""
+        try:
+            # Store the latest intensity value
+            self.animation_intensity[session_id] = float(intensity)
+            
+            # Create the message to broadcast
+            message = {
+                "status": "intensity_update",
+                "value": intensity
+            }
+            
+            logger.info(f"Broadcasting intensity update for session {session_id}: {intensity}")
+            
+            # Broadcast to all clients except the sender
+            await self.broadcast_message(session_id, message, exclude_websocket=websocket)
+            
+        except Exception as e:
+            logger.error(f"Error handling intensity update for session {session_id}: {e}")
 
     def _update_metric(self, metric_name, value):
         """Update a performance metric, maintaining a rolling average"""

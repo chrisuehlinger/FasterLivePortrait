@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 
 // Configuration
 const SERVER_URL = window.location.hostname + ":" + window.location.port;
@@ -23,6 +24,7 @@ let fps = 0;
 let statusFadeTimeout = null;
 let isConnected = false;
 let perlinNoisePass; // New variable for Perlin noise pass
+let bloomPass; // Variable for UnrealBloom pass
 let clock; // Clock for time tracking
 
 // Transition effect variables
@@ -77,6 +79,7 @@ const characterTopOffsets = [
     0,
 ];
 
+let animationIntensity = 0;
 let currentBackgroundIndex = 3;
 
 // Initialize Three.js scene
@@ -474,6 +477,21 @@ function setupPostProcessing() {
     const renderPass = new RenderPass(scene, camera);
     composer.addPass(renderPass);
     
+    // Add UnrealBloomPass for glow effect
+    const bloomParams = {
+        strength: 0,    // bloom intensity
+        radius: 0.5,      // blur radius
+        threshold: 0.1    // luminance threshold - smaller values = more bloom
+    };
+    
+    bloomPass = new UnrealBloomPass(
+        new THREE.Vector2(window.innerWidth, window.innerHeight),
+        bloomParams.strength,
+        bloomParams.radius,
+        bloomParams.threshold
+    );
+    composer.addPass(bloomPass);
+    
     // Add Perlin noise brightness shader pass
     const perlinNoiseBrightness = {
         uniforms: {
@@ -603,8 +621,6 @@ function setupPostProcessing() {
     perlinNoisePass = new ShaderPass(perlinNoiseBrightness);
     perlinNoisePass.renderToScreen = true;
     composer.addPass(perlinNoisePass);
-    
-    // You can add more post-processing effects here as needed
 }
 
 // Switch to a different background image
@@ -625,6 +641,7 @@ function switchBackground(index) {
         videoMaterial.uniforms.keyColor.value = keyColors[index];
         videoMaterial.needsUpdate = true;
         perlinNoisePass.uniforms.keyIntensity.value = 1-keyLuminosities[index];
+        
         updateTextureAspectRatio();
     }
 }
@@ -636,6 +653,11 @@ function onWindowResize() {
     
     renderer.setSize(rendererWidth, rendererHeight);
     composer.setSize(rendererWidth, rendererHeight);
+    
+    // Update bloom pass resolution if it exists
+    if (bloomPass) {
+        bloomPass.resolution.set(rendererWidth, rendererHeight);
+    }
     
     // Update transition render target size
     if (transitionRenderTarget) {
@@ -706,6 +728,13 @@ function animate() {
     // Update the time uniform for the Perlin noise shader
     if (perlinNoisePass) {
         perlinNoisePass.uniforms.time.value = currentTime;
+    }
+
+    // Adjust bloom parameters based on the source
+    if (bloomPass) {
+        // Customize bloom for each character if needed
+        const bloomStrengths = [0, 2*animationIntensity, 0, 0]; // Example values for different sources
+        bloomPass.strength = bloomStrengths[currentBackgroundIndex];
     }
     
     // Update background turbulent displacement time
@@ -786,15 +815,20 @@ async function handleWebSocketMessage(event) {
         try {
             const jsonData = JSON.parse(event.data);
             console.log('Received JSON message:', jsonData);
-            
-            // Handle source image switching
-            if (jsonData.status === 'source_switched') {
-                const sourceIndex = jsonData.current_source;
-                console.log(`Source image switched to index ${sourceIndex}: ${jsonData.source_name}`);
-                showStatus(`Source changed to: ${jsonData.source_name}`, false);
-                
-                // Switch background to match the source
-                switchBackground(sourceIndex);
+
+            switch (jsonData.status) {
+                case 'source_switched':
+                    const sourceIndex = jsonData.current_source;
+                    console.log(`Source image switched to index ${sourceIndex}: ${jsonData.source_name}`);
+                    showStatus(`Source changed to: ${jsonData.source_name}`, false);
+                    
+                    // Switch background to match the source
+                    switchBackground(sourceIndex);
+                    break;
+                case 'intensity_update':
+                    animationIntensity = jsonData.value;
+                    console.log(`Animation intensity updated to: ${animationIntensity}`);
+                    break;
             }
         } catch (e) {
             // If it's not valid JSON, just log it

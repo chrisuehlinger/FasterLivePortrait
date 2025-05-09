@@ -352,25 +352,56 @@ class Server:
                     
         @self.app.websocket("/ws/director/{session_id}")
         async def director_websocket(websocket: WebSocket, session_id: str):
-            """WebSocket endpoint for directors to send"""
+            """WebSocket endpoint for directors to send commands and receive updates"""
             try:
                 await self.connection_manager.connect_director(session_id, websocket)
                 
-                # Send confirmation to the director
-                await websocket.send_json({
+                # Send a confirmation to the director
+                response = {
                     "status": "connected", 
                     "session_id": session_id,
                     "message": "Connected to stream. Waiting for video..."
-                })
+                }
                 
-                # Keep the connection open, wait for heartbeats from the client
+                # Add info about multiple sources if available
+                if hasattr(self, 'has_multiple_sources') and self.has_multiple_sources and session_id in self.connection_manager.frame_processors:
+                    processor = self.connection_manager.frame_processors[session_id]
+                    source_count = len(processor.src_image_paths)
+                    response["has_multiple_sources"] = True
+                    response["source_count"] = source_count
+                    response["sources"] = [os.path.basename(path) for path in processor.src_image_paths]
+                    response["current_source"] = processor.current_source_index
+                
+                await websocket.send_json(response)
+                
+                # Send the current intensity if available
+                if session_id in self.connection_manager.animation_intensity:
+                    await websocket.send_json({
+                        "action": "intensity_update",
+                        "value": self.connection_manager.animation_intensity[session_id]
+                    })
+                
                 while True:
-                    # This will wait for any message from the client (like heartbeats)
+                    # This will wait for any message from the client (like heartbeats or commands)
                     message = await websocket.receive_text()
                     
                     # If it's a heartbeat, respond
                     if message == "heartbeat":
                         await websocket.send_json({"status": "heartbeat_ack"})
+                    else:
+                        # Try to parse as JSON command
+                        try:
+                            data = json.loads(message)
+                            
+                            # Handle intensity update
+                            if data.get("action") == "intensity_update":
+                                intensity = float(data.get("value", 1.0))
+                                await self.connection_manager.handle_intensity_update(session_id, intensity, websocket)
+                                
+                        except json.JSONDecodeError:
+                            logger.warning(f"Received invalid JSON from director: {message}")
+                        except Exception as e:
+                            logger.error(f"Error processing director message: {e}")
                     
             except WebSocketDisconnect:
                 self.connection_manager.disconnect_director(session_id, websocket)
@@ -386,20 +417,48 @@ class Server:
                 await self.connection_manager.connect_viewer(session_id, websocket)
                 
                 # Send confirmation to the viewer
-                await websocket.send_json({
+                response = {
                     "status": "connected", 
                     "session_id": session_id,
                     "message": "Connected to stream. Waiting for video..."
-                })
+                }
                 
-                # Keep the connection open, wait for heartbeats from the client
+                # Add info about current source if available
+                if hasattr(self, 'has_multiple_sources') and self.has_multiple_sources and session_id in self.connection_manager.frame_processors:
+                    processor = self.connection_manager.frame_processors[session_id]
+                    response["current_source"] = processor.current_source_index
+                    response["source_name"] = os.path.basename(processor.src_image_paths[processor.current_source_index])
+                
+                await websocket.send_json(response)
+                
+                # Send the current intensity if available
+                if session_id in self.connection_manager.animation_intensity:
+                    await websocket.send_json({
+                        "action": "intensity_update",
+                        "value": self.connection_manager.animation_intensity[session_id]
+                    })
+                
                 while True:
-                    # This will wait for any message from the client (like heartbeats)
+                    # This will wait for any message from the client (like heartbeats or viewer commands)
                     message = await websocket.receive_text()
                     
                     # If it's a heartbeat, respond
                     if message == "heartbeat":
                         await websocket.send_json({"status": "heartbeat_ack"})
+                    else:
+                        # Try to parse as JSON command
+                        try:
+                            data = json.loads(message)
+                            
+                            # Handle intensity update (viewers might also send updates)
+                            if data.get("action") == "intensity_update":
+                                intensity = float(data.get("value", 1.0))
+                                await self.connection_manager.handle_intensity_update(session_id, intensity, websocket)
+                                
+                        except json.JSONDecodeError:
+                            pass  # Silently ignore invalid JSON from viewers
+                        except Exception as e:
+                            logger.error(f"Error processing viewer message: {e}")
                     
             except WebSocketDisconnect:
                 self.connection_manager.disconnect_viewer(session_id, websocket)
