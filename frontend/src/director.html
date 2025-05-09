@@ -24,6 +24,27 @@
           font-size: 128px;
           color: white;
         }
+        
+        .controls-row {
+            display: flex;
+            width: 100%;
+            height: 15vh;
+            background-color: #333;
+        }
+        
+        .pause-button {
+            flex-basis: 100%;
+            font-size: 48px;
+            background-color: #555;
+            border: none;
+            color: white;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        
+        .pause-button.paused {
+            background-color: #f44336;
+        }
     </style>
 </head>
 <body>
@@ -33,7 +54,11 @@
     <button id="ixchel" style="background-color: blue;" onclick="sendCommand(1)">IX-CHEL</button>
     <button id="chacbolay" style="background-color: red;" onclick="sendCommand(2)">CHAC-BOLAY</button>
     <button id="off" style="background-color: black;" onclick="sendCommand(3)">OFF</button>
-    </div> 
+  </div>
+  
+  <div class="controls-row">
+    <button id="pauseButton" class="pause-button" onclick="togglePause()">PAUSE ANIMATION</button>
+  </div>
 
     <script>
         // Configuration
@@ -47,6 +72,10 @@
             chacbolay: document.getElementById('chacbolay'),
             off: document.getElementById('off')
         };
+        
+        // Pause state tracking
+        let isPaused = false;
+        const pauseButton = document.getElementById('pauseButton');
 
         function sendCommand(index) {
             fetch(`${API_URL}/switch_source/performer1/${index}`, {
@@ -60,7 +89,31 @@
             .then(data => console.log('Success:', data))
             .catch((error) => console.error('Error:', error));
         }
-
+        
+        function togglePause() {
+            isPaused = !isPaused;
+            
+            // Update button appearance
+            if (isPaused) {
+                pauseButton.textContent = "RESUME ANIMATION";
+                pauseButton.classList.add('paused');
+            } else {
+                pauseButton.textContent = "PAUSE ANIMATION";
+                pauseButton.classList.remove('paused');
+            }
+            
+            // Send command to server
+            fetch(`${API_URL}/toggle_pause/performer1`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ paused: isPaused })
+            })
+            .then(response => response.json())
+            .then(data => console.log('Pause state changed:', data))
+            .catch((error) => console.error('Error toggling pause:', error));
+        }
     </script>
 </body>
 </html>

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Dict, Optional, List, Set
 from omegaconf import OmegaConf
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -1100,6 +1100,28 @@ class Server:
                 "session_id": session_id,
                 "status": "success"
             }
+        
+        # Add a new route to toggle animation pause state
+        @self.app.post("/toggle_pause/{session_id}")
+        async def toggle_pause(session_id: str, request: Request):
+            data = await request.json()
+            paused = data.get("paused", False)
+            
+            if session_id in self.connection_manager.frame_processors:
+                processor = self.connection_manager.frame_processors[session_id]
+                
+                # Set pause animation flag in the pipeline
+                if hasattr(processor, 'pipeline') and processor.pipeline:
+                    processor.pipeline.pause_animation = paused
+                    
+                    # Broadcast pause state to all viewers
+                    await self.connection_manager.notify_viewers_source_switched(
+                        session_id, processor.current_source_index, os.path.basename(processor.src_image_paths[processor.current_source_index])
+                    )
+                    
+                    return {"success": True, "session_id": session_id, "paused": paused}
+            
+            return {"success": False, "error": "Session not found"}
             
         @self.app.websocket("/ws/actor/{session_id}")
         async def actor_websocket(websocket: WebSocket, session_id: str):

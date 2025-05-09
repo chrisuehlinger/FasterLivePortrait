@@ -26,6 +26,8 @@ class FasterLivePortraitPipeline:
     def __init__(self, cfg, **kwargs):
         self.cfg = cfg
         self.init(**kwargs)
+        # Initialize pause_animation flag as False by default
+        self.pause_animation = False
 
     def init(self, **kwargs):
         self.init_vars(**kwargs)
@@ -504,6 +506,25 @@ class FasterLivePortraitPipeline:
         return out_crop.to(dtype=torch.uint8).cpu().numpy(), I_p_pstbk.to(dtype=torch.uint8).cpu().numpy()
 
     def run(self, image, img_src, src_info, **kwargs):
+        # Check if animation is paused - return source image if paused
+        if self.pause_animation and img_src is not None:
+            # If paused, return the source image without modification
+            # We'll still need to format the return values to match the expected structure
+
+            # Get original dimensions for proper return formatting
+            h, w = img_src.shape[:2]
+            if self.cfg.infer_params.flag_do_crop:
+                # Return placeholder for driving crop since we're paused
+                dri_crop = np.zeros((512, 512, 3), dtype=np.uint8)
+                # Return unmodified source cropped to 512x512
+                src_crop = cv2.resize(img_src, (512, 512))
+                # Return unmodified source image
+                return dri_crop, src_crop, img_src, (None, None, None)
+            else:
+                # Similar return structure but with full-sized image
+                return None, img_src, img_src, (None, None, None)
+
+        # If not paused, continue with regular processing
         img_bgr = image
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         I_p_pstbk = torch.from_numpy(img_src).to(self.device).float()
@@ -591,6 +612,18 @@ class FasterLivePortraitPipeline:
         return img_crop, out_crop, I_p_pstbk, dri_motion_info
 
     def run_with_pkl(self, dri_motion_info, img_src, src_info, **kwargs):
+        # Check if animation is paused - return source image if paused
+        if self.pause_animation and img_src is not None:
+            # If paused, return the source image without modification
+            h, w = img_src.shape[:2]
+
+            # Return unmodified source cropped to 512x512 for crop output
+            src_crop = cv2.resize(img_src, (512, 512))
+
+            # Return unmodified source image for both outputs
+            return src_crop, img_src
+
+        # If not paused, continue with regular processing
         I_p_pstbk = torch.from_numpy(img_src).to(self.device).float()
         realtime = kwargs.get("realtime", False)
 
