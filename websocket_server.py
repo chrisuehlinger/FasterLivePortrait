@@ -635,7 +635,7 @@ class ConnectionManager:
             # Switching from a proxied source to a local one
             logger.info(f"Switching from proxied source {from_index} to local source {to_index}")
             if session_id in self.proxy_connections:
-                await self.proxy_connections[session_id].disconnect()
+                self.proxy_connections[session_id].disconnect()
             self.current_proxy_active[session_id] = False
     
     async def receive_frame(self, session_id: str, frame: np.ndarray):
