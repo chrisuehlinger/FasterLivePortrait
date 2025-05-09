@@ -861,7 +861,9 @@ class ConnectionManager:
     # New method to send notifications to viewers when source is switched
     async def notify_viewers_source_switched(self, session_id: str, source_index: int, source_name: str):
         """Notify all viewers that the source image has been switched"""
+        logger.info(f"Notifying viewers of source switch in session {session_id}: {source_index} - {source_name}")
         if session_id not in self.viewer_connections:
+            logger.warning(f"No viewers connected for session {session_id}")
             return
             
         message = {
@@ -873,6 +875,7 @@ class ConnectionManager:
         disconnected_viewers = []
         for viewer_websocket in self.viewer_connections[session_id]:
             try:
+                logger.info(f"Sending source switch notification to viewer in session {session_id}: {message}")
                 await viewer_websocket.send_json(message)
             except Exception as e:
                 logger.error(f"Error sending source switch notification to viewer in session {session_id}: {e}")
@@ -885,6 +888,7 @@ class ConnectionManager:
     # New method to send notifications to viewers when source is switched
     async def notify_actors_source_switched(self, session_id: str, source_index: int, source_name: str):
         """Notify all actors that the source image has been switched"""
+        logger.info(f"Notifying actors of source switch in session {session_id}: {source_index} - {source_name}")
         if session_id not in self.actor_connections:
             return
             
@@ -1073,7 +1077,7 @@ class Server:
         @self.app.post("/switch_source/{session_id}/{index}")
         async def switch_source(request: dict = Body(...)):
             # Allow custom session ID if provided, otherwise generate one
-            session_id = request.get("session_id", str(uuid.uuid4()))
+            session_id = request.get("session_id", "performer1")
             index = int(request.get("index", 0))
             old_index = self.processor.current_source_index
             

@@ -36,8 +36,8 @@ python websocket_server.py \
   --port 9090 \
   --host 0.0.0.0 \
   --config-path configs/trt_infer.yaml \
-  --source-image assets/examples/source/ahau-kin.png \
-  --source-image-2 assets/examples/source/ix-chel.png \
+  --source-image assets/examples/source/chac-bolay-head.png \
+  --source-image-2 assets/examples/source/chac-bolay-head.png \
   --source-image-3 assets/examples/source/chac-bolay-head.png \
   --is-animal &
 
@@ -53,12 +53,12 @@ python websocket_server.py \
   --config-path configs/trt_infer.yaml \
   --source-image assets/examples/source/ahau-kin.png \
   --source-image-2 assets/examples/source/ix-chel.png \
-  --source-image-3 assets/examples/source/chac-bolay-head.png \
+  --source-image-3 assets/examples/source/ahau-kin.png \
   --source-image-4 assets/examples/source/ahau-kin.png \
   --ssl-cert certs/cert.pem \
   --ssl-key certs/key.pem \
   --proxy-target localhost:9090 \
-  --proxy-sources 3
+  --proxy-sources 2
 
 # Keep the script running
 wait

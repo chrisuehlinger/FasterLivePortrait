@@ -5,7 +5,7 @@ docker build . \
 
 # docker system prune -f
 
-xhost +local:root
+# xhost +local:root
 docker run -it --gpus=all \
   --rm \
   --privileged \
