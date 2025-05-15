@@ -16,8 +16,13 @@ from .transformation import (
     apply_transformation, compose_transforms, invert_transform,
     convert_coordinates, get_face_aligned_transform
 )
+from .types import (
+    LandmarkVisualizationOptions, VisualizationFormat,
+    ComparisonOptions
+)
 
 __all__ = [
+    # From visualization.py
     'draw_landmarks', 'render_3d_mesh', 'draw_transformed_landmarks',
     'create_comparison', 'save_visualization', 'show_interactive',
     'LandmarkVisualizationOptions',

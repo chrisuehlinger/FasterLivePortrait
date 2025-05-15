@@ -10,5 +10,17 @@ to support the creation and editing of SPD (Source Portrait Descriptor) files.
 from .face_detector import FaceDetector
 from .landmark_extractor import LandmarkExtractor
 from .feature_extractor import FeatureExtractor
+from .protocols import (
+    FaceDetectorProtocol, LandmarkExtractorProtocol,
+    FeatureExtractorProtocol, SPDProcessorProtocol
+)
 
-__all__ = ['FaceDetector', 'LandmarkExtractor', 'FeatureExtractor']
+__all__ = [
+    'FaceDetector', 
+    'LandmarkExtractor', 
+    'FeatureExtractor',
+    'FaceDetectorProtocol', 
+    'LandmarkExtractorProtocol',
+    'FeatureExtractorProtocol', 
+    'SPDProcessorProtocol'
+]

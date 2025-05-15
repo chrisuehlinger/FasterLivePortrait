@@ -12,7 +12,8 @@ import struct
 from enum import Enum, auto
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Union, Optional, Any, Tuple, Set, BinaryIO, cast
+from typing import Dict, List, Union, Optional, Any, Tuple, Set, BinaryIO, cast, Callable
+from typing_extensions import TypedDict, Protocol, Literal
 
 from .format import (
     MAGIC_BYTES, CURRENT_VERSION,

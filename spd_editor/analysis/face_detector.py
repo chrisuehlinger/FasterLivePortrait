@@ -10,9 +10,20 @@ import os
 import logging
 import numpy as np
 import cv2
-from typing import List, Dict, Tuple, Optional, Union, Any
+from typing import List, Dict, Tuple, Optional, Union, Any, cast, Type, TypeVar
+from typing_extensions import TypedDict, Protocol
 import sys
 import importlib.util
+
+# Import local types
+from .protocols import FaceDetectorProtocol
+from .face_detection_types import FaceBoundingBox, FaceDetection, DetectionOptions
+
+# Type variable for FaceDetector implementations
+T = TypeVar('T')
+
+# Import protocol for static type checking
+from .protocols import FaceDetectorProtocol
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

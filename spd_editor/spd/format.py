@@ -9,7 +9,8 @@ import struct
 import time
 from dataclasses import dataclass
 from enum import IntEnum, auto
-from typing import Dict, List, Optional, Tuple, TypeVar, Union, Any, BinaryIO
+from typing import Dict, List, Optional, Tuple, TypeVar, Union, Any, BinaryIO, Protocol, cast
+from typing_extensions import TypedDict, Literal, NotRequired
 
 # SPD Format Constants
 MAGIC_BYTES = b"SPDV"
@@ -40,6 +41,65 @@ class SectionMarker(IntEnum):
     MASK = 0x4D41534B  # "MASK" (in hex)
     ADDITIONAL_FLAGS = 0x464C4753  # "FLGS" (in hex)
     END = 0x454E4421  # "END!" (in hex)
+
+
+# TypedDict definitions for structured data
+class LandmarkPoint(TypedDict):
+    """TypedDict representing a single 2D or 3D landmark point."""
+    x: float
+    y: float
+    z: NotRequired[float]  # Optional for 3D landmarks
+    confidence: NotRequired[float]  # Optional confidence score
+
+
+class FacialLandmarks(TypedDict):
+    """TypedDict representing a set of facial landmarks."""
+    points: List[LandmarkPoint]
+    format: str  # Format identifier (e.g., 'mediapipe', 'dlib68', etc.)
+    version: NotRequired[str]  # Optional version information
+
+
+class MotionParameters(TypedDict):
+    """TypedDict representing motion parameters for animation."""
+    head_pose: Dict[str, float]  # Head pose parameters (pitch, yaw, roll)
+    expression_weights: Dict[str, float]  # Facial expression blend shape weights
+    eye_gaze: NotRequired[Dict[str, float]]  # Optional eye gaze parameters
+
+
+class AppearanceFeatures(TypedDict):
+    """TypedDict representing appearance features."""
+    embedding: List[float]  # Facial embedding vector
+    model: NotRequired[str]  # Optional model identifier
+
+
+class TransformationMatrix(TypedDict):
+    """TypedDict representing a transformation matrix."""
+    matrix: List[List[float]]  # 3x3 or 4x4 transformation matrix
+    type: str  # Type of transformation ('rigid', 'affine', 'perspective', etc.)
+
+
+class MaskData(TypedDict):
+    """TypedDict representing mask data."""
+    width: int
+    height: int
+    data: bytes  # Raw mask data
+    format: str  # Mask format descriptor
+
+
+class SPDFileInfo(TypedDict):
+    """TypedDict representing metadata for an SPD file."""
+    version: int
+    timestamp: float
+    flags: int
+    sections: List[str]  # List of section names present in the file
+    has_image: bool
+    has_landmarks: bool
+    has_motion_params: bool
+    has_appearance: bool
+    has_transforms: bool
+    has_mask: bool
+    is_compressed: bool
+    is_encrypted: bool
 
 
 @dataclass

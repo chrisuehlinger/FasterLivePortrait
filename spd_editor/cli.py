@@ -15,7 +15,13 @@ import json
 import time
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Union, Tuple
+from typing import List, Dict, Any, Optional, Union, Tuple, Callable, cast, TypeVar
+from typing_extensions import TypedDict, Protocol
+
+from spd_editor.cli_types import (
+    ExitCode, CommandOptions, CreateOptions, InspectOptions,
+    ExtractOptions, ConvertOptions, ValidateOptions, VisualizeOptions
+)
 
 # Import SPD modules
 from spd_editor.spd.format import (

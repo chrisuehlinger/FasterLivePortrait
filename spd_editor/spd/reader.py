@@ -9,7 +9,8 @@ import io
 import struct
 import logging
 from pathlib import Path
-from typing import Dict, List, Union, Optional, BinaryIO, Tuple, Any, TypeVar, Type, cast
+from typing import Dict, List, Union, Optional, BinaryIO, Tuple, Any, TypeVar, Type, cast, Callable
+from typing_extensions import TypedDict, Literal
 
 from .format import (
     MAGIC_BYTES, CURRENT_VERSION,
@@ -19,6 +20,9 @@ from .format import (
     MaskSection, AdditionalFlagsSection,
     validate_header, flags_to_dict
 )
+from .types import (
+    SPDFileInfo, ValidationResult
+)
 
 # Set up logger for this module
 logger = logging.getLogger(__name__)
@@ -27,21 +31,61 @@ logger = logging.getLogger(__name__)
 PathLike = Union[str, Path]
 FileOrPath = Union[BinaryIO, PathLike]
 T = TypeVar('T')
+SectionType = TypeVar('SectionType')
+
+# Error severity levels
+ErrorSeverity = Literal["error", "warning", "info"]
+
+# Custom TypedDict for error information
+class ErrorInfo(TypedDict):
+    """TypedDict representing detailed error information."""
+    message: str
+    section: Optional[str]
+    code: str
+    severity: ErrorSeverity
+    details: Optional[Dict[str, Any]]
 
 
 class SPDError(Exception):
     """Base class for all SPD-related exceptions."""
-    pass
+    
+    def __init__(self, message: str, code: str = "general_error", 
+                 severity: ErrorSeverity = "error", 
+                 details: Optional[Dict[str, Any]] = None) -> None:
+        self.message = message
+        self.code = code
+        self.severity = severity
+        self.details = details or {}
+        super().__init__(message)
+    
+    def to_dict(self) -> ErrorInfo:
+        """Convert error to dictionary format."""
+        return {
+            "message": self.message,
+            "section": None,
+            "code": self.code,
+            "severity": self.severity,
+            "details": self.details
+        }
 
 
 class SPDFormatError(SPDError):
     """Raised when the SPD file format is invalid."""
-    pass
+    
+    def __init__(self, message: str, code: str = "format_error", 
+                 severity: ErrorSeverity = "error",
+                 details: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(message, code, severity, details)
 
 
 class SPDVersionError(SPDError):
     """Raised when the SPD file version is not supported."""
-    pass
+    
+    def __init__(self, message: str, version: int, 
+                 code: str = "version_error", 
+                 severity: ErrorSeverity = "error") -> None:
+        details = {"version": version, "supported_version": CURRENT_VERSION}
+        super().__init__(message, code, severity, details)
 
 
 class SPDSectionError(SPDError):

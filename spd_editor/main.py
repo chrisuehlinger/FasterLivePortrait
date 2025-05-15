@@ -4,7 +4,8 @@ Main entry point for SPD Editor.
 """
 import argparse
 import sys
-from typing import List, Optional
+from typing import List, Optional, Callable, Dict, Union, Any, NoReturn, cast
+from typing_extensions import TypedDict
 
 from spd_editor import __version__
 from spd_editor.cli import main as cli_main

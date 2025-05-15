@@ -10,7 +10,8 @@ import struct
 import time
 import logging
 from pathlib import Path
-from typing import Dict, List, Union, Optional, BinaryIO, Tuple, Any, TypeVar, Type, cast
+from typing import Dict, List, Union, Optional, BinaryIO, Tuple, Any, TypeVar, Type, cast, Callable, Iterator
+from typing_extensions import TypedDict, Protocol, runtime_checkable
 
 from .format import (
     MAGIC_BYTES, CURRENT_VERSION,
@@ -19,6 +20,10 @@ from .format import (
     MotionParamsSection, AppearanceSection, TransformationSection,
     MaskSection, AdditionalFlagsSection,
     validate_header, flags_to_dict, dict_to_flags
+)
+from .types import (
+    SPDFileInfo, ProcessingOptions, LandmarkPoint,
+    FacialLandmarks, MotionParameters, AppearanceFeatures
 )
 
 # Set up logger for this module

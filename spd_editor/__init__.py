@@ -1,3 +1,8 @@
 """Source Portrait Descriptor Editor for FasterLivePortrait"""
 
-__version__ = "0.1.0"
+from typing import Final
+
+__version__: Final[str] = "0.1.0"
+
+# Re-export all types from the types module
+from .types import *
