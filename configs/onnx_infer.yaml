@@ -42,23 +42,23 @@ animal_models:
   motion_extractor:
     name: "MotionExtractorModel"
     predict_type: "ort"
-    model_path: "./checkpoints/liveportrait_animal_onnx/motion_extractor.onnx"
+    model_path: "./checkpoints/liveportrait_animal_onnx/motion_extractor-v1.1.onnx"
   app_feat_extractor:
     name: "AppearanceFeatureExtractorModel"
     predict_type: "ort"
-    model_path: "./checkpoints/liveportrait_animal_onnx/appearance_feature_extractor.onnx"
+    model_path: "./checkpoints/liveportrait_animal_onnx/appearance_feature_extractor-v1.1.onnx"
   stitching:
     name: "StitchingModel"
     predict_type: "ort"
-    model_path: "./checkpoints/liveportrait_animal_onnx/stitching.onnx"
+    model_path: "./checkpoints/liveportrait_animal_onnx/stitching-v1.1.onnx"
   stitching_eye_retarget:
     name: "StitchingModel"
     predict_type: "ort"
-    model_path: "./checkpoints/liveportrait_animal_onnx/stitching_eye.onnx"
+    model_path: "./checkpoints/liveportrait_animal_onnx/stitching_eye-v1.1.onnx"
   stitching_lip_retarget:
     name: "StitchingModel"
     predict_type: "ort"
-    model_path: "./checkpoints/liveportrait_animal_onnx/stitching_lip.onnx"
+    model_path: "./checkpoints/liveportrait_animal_onnx/stitching_lip-v1.1.onnx"
   landmark:
     name: "LandmarkModel"
     predict_type: "ort"

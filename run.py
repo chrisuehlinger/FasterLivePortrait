@@ -31,16 +31,18 @@ import numpy as np
 import os
 import datetime
 import platform
-import pickle
+import pickle  # added for preprocessed source data
 import collections
 import logging
 import threading
+import torch
 from typing import Dict, List, Any, Deque, Optional, Tuple, Union
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from colorama import Fore, Back, Style
 from src.pipelines.faster_live_portrait_pipeline import FasterLivePortraitPipeline
 from src.utils.utils import video_has_audio
+from src.utils.crop import prepare_paste_back
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -199,49 +201,67 @@ class MultiSourceManager:
             self.pipeline.src_lmk_pre = None
 
 def run_with_video(args):
+    # Initialize multi_source_mode to avoid UnboundLocalError when src_data is used
+    multi_source_mode = False
     print(Fore.RED+'Render,  Q > exit,  S > Stitching,  Z > RelativeMotion,  X > AnimationRegion,  C > CropDrivingVideo, KL > AdjustSourceScale, NM > AdjustDriverScale,  Space > Webcamassource,  R > SwitchRealtimeWebcamUpdate'+Style.RESET_ALL)
     infer_cfg = OmegaConf.load(args.cfg)
     infer_cfg.infer_params.flag_pasteback = args.paste_back
 
     # Initialize pipeline
     pipe = FasterLivePortraitPipeline(cfg=infer_cfg, is_animal=args.animal)
-    
-    # Setup multiple sources if provided
-    source_images = [args.src_image]  # Start with the primary source image
-    if args.src_image_2:
-        source_images.append(args.src_image_2)
-    if args.src_image_3:
-        source_images.append(args.src_image_3)
-    
-    # Check if multi-source mode is enabled
-    multi_source_mode = len(source_images) > 1 and args.auto_switch
-    
-    if multi_source_mode:
-        # Initialize the multi-source manager with all source images
-        source_manager = MultiSourceManager(
-            source_images=source_images, 
-            pipeline=pipe, 
-            switch_interval=args.switch_interval,
-            is_animal=args.animal
-        )
-        
-        # Start automatic switching if requested
-        if args.auto_switch:
-            source_manager.start_auto_switching()
-            
-        # Use the first source to start
-        current_source = source_manager.get_current_source()
-        src_img = current_source["image"]
-        src_info = current_source["info"]
-        last_source_index = source_manager.current_index
-    else:
-        # Standard single-source mode
-        ret = pipe.prepare_source(args.src_image, realtime=args.realtime)
-        if not ret:
-            print(f"No face in {args.src_image}! exit!")
+    # Load preprocessed source if provided
+    if args.src_data:
+        # Disable pasteback for preprocessed source data
+        pipe.cfg.infer_params.flag_pasteback = False
+        # Load serialized source data
+        with open(args.src_data, 'rb') as f:
+            data = pickle.load(f)
+        pipe.is_source_video = data['is_source_video']
+        pipe.src_imgs = data['src_imgs']
+        pipe.src_infos = data['src_infos']
+        if not pipe.src_infos:
+            print(f"No source info in {args.src_data}! exit!")
             exit(1)
+        # Use first frame and face info
         src_img = pipe.src_imgs[0]
         src_info = pipe.src_infos[0]
+    else:
+        # Setup multiple sources if provided
+        source_images = [args.src_image]  # Start with the primary source image
+        if args.src_image_2:
+            source_images.append(args.src_image_2)
+        if args.src_image_3:
+            source_images.append(args.src_image_3)
+        
+        # Check if multi-source mode is enabled
+        multi_source_mode = len(source_images) > 1 and args.auto_switch
+        
+        if multi_source_mode:
+            # Initialize the multi-source manager with all source images
+            source_manager = MultiSourceManager(
+                source_images=source_images, 
+                pipeline=pipe, 
+                switch_interval=args.switch_interval,
+                is_animal=args.animal
+            )
+            
+            # Start automatic switching if requested
+            if args.auto_switch:
+                source_manager.start_auto_switching()
+                
+            # Use the first source to start
+            current_source = source_manager.get_current_source()
+            src_img = current_source["image"]
+            src_info = current_source["info"]
+            last_source_index = source_manager.current_index
+        else:
+            # Standard single-source mode
+            ret = pipe.prepare_source(args.src_image, realtime=args.realtime)
+            if not ret:
+                print(f"No face in {args.src_image}! exit!")
+                exit(1)
+            src_img = pipe.src_imgs[0]
+            src_info = pipe.src_infos[0]
     
     if not args.dri_video or not os.path.exists(args.dri_video):
         # read frame from camera if no driving video input
@@ -624,6 +644,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Faster Live Portrait Pipeline')
     parser.add_argument('--src_image', required=False, type=str, default="assets/examples/source/s12.jpg",
                         help='primary source image')
+    parser.add_argument('--src_data', type=str, default=None,
+                        help='path to preprocessed source data file')  # added
     parser.add_argument('--src_image_2', type=str, default="",
                         help='second source image for auto-switching')
     parser.add_argument('--src_image_3', type=str, default="",
