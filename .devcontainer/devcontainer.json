@@ -1,6 +1,6 @@
 {
 	"name": "FasterLivePortrait Development",
-	"dockerFile": "Dockerfile",
+	"image": "uehreka/fasterliveportrait:dev",
 	"runArgs": [
 		"--gpus=all",
 		"-v", "/tmp/.X11-unix:/tmp/.X11-unix",

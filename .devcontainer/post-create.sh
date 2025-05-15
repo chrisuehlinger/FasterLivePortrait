@@ -5,6 +5,10 @@ echo "Running post-creation setup..."
 
 WORKSPACE_ROOT=/workspaces/FasterLivePortrait
 
+echo "Installing Claude Code..."
+npm install -g @anthropic-ai/claude-code
+
+
 # Install project requirements
 echo "Installing Python requirements..."
 if [ -f "$WORKSPACE_ROOT/requirements.txt" ]; then
