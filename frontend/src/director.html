@@ -1,287 +1,373 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FasterLivePortrait - Actor Streaming</title>
-    <!-- Module imports are placed at end of body -->
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            background-color: #f0f0f0;
-            color: #333;
-            margin: 0 auto;
-            position: fixed;
-            width: 100vw;
-            height: 100vh;
-
-        }
-
-        .container {
-            display: flex;
-            flex-wrap: wrap;
-            background-color: #f0f0f0;
-            height: 80vh;
-        }
-        button {
-          flex-basis: 50%;
-          font-size: 128px;
-          color: white;
-        }
-        
-        .controls-row {
-            display: flex;
-            width: 100%;
-            height: 10vh;
-            background-color: #333;
-        }
-        
-        .pause-button {
-            flex-basis: 100%;
-            height: 10vh;
-            width: 100vw;
-            font-size: 48px;
-            background-color: #555;
-            border: none;
-            color: white;
-            cursor: pointer;
-            transition: background-color 0.3s;
-        }
-        
-        .pause-button.paused {
-            background-color: #f44336;
-        }
-        
-        .intensity-control {
-            display: flex;
-            width: 100%;
-            height: 10vh;
-            background-color: #222;
-            padding: 10px;
-            align-items: center;
-            color: white;
-        }
-        
-        .intensity-slider {
-            flex-grow: 1;
-            margin: 0 20px;
-            height: 30px;
-        }
-        
-        .intensity-value {
-            width: 60px;
-            text-align: center;
-            font-size: 24px;
-        }
-        
-        .intensity-label {
-            font-size: 24px;
-            width: 180px;
-        }
-    </style>
-</head>
-<body>
-
-  <div class="container">
-    <button id="ahaukin" style="background-color: goldenrod;" onclick="sendCommand(0)">AHAU-KIN</button>
-    <button id="ixchel" style="background-color: blue;" onclick="sendCommand(1)">IX-CHEL</button>
-    <button id="chacbolay" style="background-color: red;" onclick="sendCommand(2)">CHAC-BOLAY</button>
-    <button id="off" style="background-color: black;" onclick="sendCommand(3)">OFF</button>
-  </div>
-  
-  <div class="intensity-control">
-    <div class="intensity-label">INTENSITY:</div>
-    <input type="range" id="intensitySlider" class="intensity-slider" min="0" max="100" value="100" step="1" value="0">
-    <div id="intensityValue" class="intensity-value">0.0</div>
-  </div>
-  
-  <div class="controls-row">
-    <button id="pauseButton" class="pause-button" onclick="togglePause()">PAUSE ANIMATION</button>
-  </div>
-
-    <script type="module">
-        import { setupWebSocketHandler, sendIntensityUpdate as sendIntensityUpdateModule } from './js/websocket-handler.js';
-        
-        // Configuration
-        const SERVER_URL = window.location.hostname + ":" + window.location.port;
-        const USE_SSL = window.location.protocol === 'https:';
-        const API_URL = `${USE_SSL ? 'https' : 'http'}://${SERVER_URL}`;
-        const WS_URL = `${USE_SSL ? 'wss' : 'ws'}://${SERVER_URL}`;
-        
-        // Session ID (fixed for this app)
-        const SESSION_ID = 'performer1';
-        
-        // WebSocket connection for director
-        let socket;
-        let reconnectTimer = null;
-        let heartbeatInterval = null;
-
-        const buttons = {
-            ahaukin: document.getElementById('ahaukin'),
-            ixchel: document.getElementById('ixchel'),
-            chacbolay: document.getElementById('chacbolay'),
-            off: document.getElementById('off')
-        };
-        
-        // Pause state tracking
-        let isPaused = false;
-        const pauseButton = document.getElementById('pauseButton');
-        
-        // Intensity control elements
-        const intensitySlider = document.getElementById('intensitySlider');
-        const intensityValue = document.getElementById('intensityValue');
-        
-        // Export functions to global scope for HTML onclick attributes
-        window.sendCommand = sendCommand;
-        window.togglePause = togglePause;
-
-        // Function to send command to switch sources
-        function sendCommand(index) {
-            console.log(`Sending command to switch to source ${index}`);
-            fetch(`${API_URL}/switch_source/performer1/${index}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ index: index })
-            })
-            .then(response => response.json())
-            .then(data => {
-                console.log('Source switch success:', data);
-                
-                // Highlight the active button
-                const buttonIds = ['ahaukin', 'ixchel', 'chacbolay', 'off'];
-                
-                // Reset all buttons
-                buttonIds.forEach(id => {
-                    const button = document.getElementById(id);
-                    if (button) button.style.opacity = "1.0";
-                });
-                
-                // Highlight the active one
-                if (index >= 0 && index < buttonIds.length) {
-                    const button = document.getElementById(buttonIds[index]);
-                    if (button) button.style.opacity = "0.7";
-                }
-            })
-            .catch((error) => console.error('Error switching source:', error));
-        }
-        
-        function togglePause() {
-            isPaused = !isPaused;
-            
-            // Update button appearance
-            if (isPaused) {
-                pauseButton.textContent = "RESUME ANIMATION";
-                pauseButton.classList.add('paused');
-            } else {
-                pauseButton.textContent = "PAUSE ANIMATION";
-                pauseButton.classList.remove('paused');
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>FasterLivePortrait - Director Controller</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                margin: 0;
+                background-color: #f0f0f0;
+                color: #333;
+                margin: 0 auto;
+                position: fixed;
+                width: 100vw;
+                height: 100vh;
             }
-            
-            // Send command to server
-            fetch(`${API_URL}/toggle_pause/performer1`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ paused: isPaused })
-            })
-            .then(response => response.json())
-            .then(data => console.log('Pause state changed:', data))
-            .catch((error) => console.error('Error toggling pause:', error));
-        }
-        
-        // Initialize WebSocket connection
-        function connectWebSocket() {
-            if (socket && socket.readyState === WebSocket.OPEN) {
-                console.log('WebSocket already connected');
-                return;
+
+            .container {
+                display: flex;
+                flex-wrap: wrap;
+                background-color: #f0f0f0;
+                height: 80vh;
             }
-            
-            console.log(`Connecting to WebSocket at ${WS_URL}/ws/director/${SESSION_ID}`);
-            const ws = new WebSocket(`${WS_URL}/ws/director/${SESSION_ID}`);
-            
-            // Use the imported setupWebSocketHandler to manage the connection
-            socket = setupWebSocketHandler(ws, {
-                onIntensityUpdate: (intensity) => {
-                    // Update the slider when intensity is changed by others
-                    intensitySlider.value = Math.round(intensity * 100);
-                    intensityValue.textContent = intensity.toFixed(1);
-                },
-                onSourceSwitched: (data) => {
-                    console.log(`Source switched to: ${data.sourceName}`);
-                }
-            });
-            
-            // Set up event listeners for the websocket events
-            document.addEventListener('websocket:open', () => {
-                console.log('WebSocket connected');
-                if (reconnectTimer) {
-                    clearTimeout(reconnectTimer);
-                    reconnectTimer = null;
-                }
-            });
-            
-            document.addEventListener('websocket:close', () => {
-                console.log('WebSocket disconnected');
-                
-                // Try to reconnect after 3 seconds
-                if (!reconnectTimer) {
-                    reconnectTimer = setTimeout(connectWebSocket, 3000);
-                }
-            });
-            
-            document.addEventListener('websocket:error', (e) => {
-                console.error('WebSocket error:', e.detail.error);
-            });
-            
-            // Specific handler for source switching with detailed logging
-            document.addEventListener('websocket:source_switched', (e) => {
-                console.log(`Source switched to: ${e.detail.sourceName} (index: ${e.detail.sourceIndex}, initiated by: ${e.detail.initiatedBy || 'unknown'})`);
-                
-                // Highlight the active button based on the source index
-                const sourceIndex = e.detail.sourceIndex;
-                const buttonIds = ['ahaukin', 'ixchel', 'chacbolay', 'off'];
-                
-                // Reset all buttons
-                buttonIds.forEach(id => {
-                    const button = document.getElementById(id);
-                    if (button) button.style.opacity = "1.0";
-                });
-                
-                // Highlight the active one if it's in range
-                if (sourceIndex >= 0 && sourceIndex < buttonIds.length) {
-                    const button = document.getElementById(buttonIds[sourceIndex]);
-                    if (button) button.style.opacity = "0.7"; // Make it slightly transparent to show it's active
-                }
-            });
-        }
-        
-        // Send intensity update over WebSocket
-        function sendIntensityUpdate(value) {
-            if (socket && socket.readyState === WebSocket.OPEN) {
-                socket.sendJson({
-                    action: 'intensity_update',
-                    value: value,
-                    initiated_by: 'director'
-                });
-                console.log(`Sent intensity update: ${value}`);
-            } else {
-                console.warn('Cannot send intensity update: socket not connected');
+            button {
+                flex-basis: 33%;
+                font-size: 128px;
+                color: white;
             }
-        }
-        
-        // Initialize intensity slider
-        intensitySlider.addEventListener('input', function() {
-            const intensity = this.value / 100;
-            intensityValue.textContent = intensity.toFixed(1);
-            sendIntensityUpdate(intensity);
-        });
-        
-        // Connect WebSocket on page load
-        window.addEventListener('load', connectWebSocket);
-    </script>
-</body>
+
+            .controls-row {
+                display: flex;
+                width: 100%;
+                height: 10vh;
+                background-color: #333;
+            }
+
+            .pause-button {
+                flex-basis: 100%;
+                height: 10vh;
+                width: 100vw;
+                font-size: 48px;
+                background-color: #555;
+                border: none;
+                color: white;
+                cursor: pointer;
+                transition: background-color 0.3s;
+            }
+
+            .pause-button.paused {
+                background-color: #f44336;
+            }
+
+            .intensity-control {
+                display: flex;
+                width: 100%;
+                height: 10vh;
+                background-color: #222;
+                padding: 10px;
+                align-items: center;
+                color: white;
+            }
+
+            .intensity-slider {
+                flex-grow: 1;
+                margin: 0 20px;
+                height: 30px;
+            }
+
+            .intensity-value {
+                width: 60px;
+                text-align: center;
+                font-size: 24px;
+            }
+
+            .intensity-label {
+                font-size: 24px;
+                width: 180px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <button
+                id="ahaukin"
+                style="background-color: goldenrod"
+                onclick="sendCommand(0)"
+            >
+                AHAU-KIN
+            </button>
+            <button
+                id="ixchel"
+                style="background-color: blue"
+                onclick="sendCommand(1)"
+            >
+                IX-CHEL
+            </button>
+            <button
+                id="chacbolay"
+                style="background-color: red"
+                onclick="sendCommand(2)"
+            >
+                CHAC-BOLAY
+            </button>
+            <button
+                id="off"
+                style="background-color: black"
+                onclick="sendCommand(3)"
+            >
+                OFF
+            </button>
+            <button
+                id="motalon"
+                style="background-color: dodgerblue"
+                onclick="sendMotalCommand(true)"
+            >
+                MOTAL ON
+            </button>
+            <button
+                id="motaloff"
+                style="background-color: tomato"
+                onclick="sendMotalCommand(false)"
+            >
+                MOTAL OFF
+            </button>
+        </div>
+
+        <div class="intensity-control">
+            <div class="intensity-label">INTENSITY:</div>
+            <input
+                type="range"
+                id="intensitySlider"
+                class="intensity-slider"
+                min="0"
+                max="100"
+                value="100"
+                step="1"
+                value="0"
+            />
+            <div id="intensityValue" class="intensity-value">0.0</div>
+        </div>
+
+        <div class="controls-row">
+            <button
+                id="pauseButton"
+                class="pause-button"
+                onclick="togglePause()"
+            >
+                PAUSE ANIMATION
+            </button>
+        </div>
+
+        <script type="module">
+            import {
+                setupWebSocketHandler,
+                sendIntensityUpdate as sendIntensityUpdateModule,
+            } from "./js/websocket-handler.js";
+
+            // Configuration
+            const SERVER_URL =
+                window.location.hostname + ":" + window.location.port;
+            const USE_SSL = window.location.protocol === "https:";
+            const API_URL = `${USE_SSL ? "https" : "http"}://${SERVER_URL}`;
+            const WS_URL = `${USE_SSL ? "wss" : "ws"}://${SERVER_URL}`;
+
+            // Session ID (fixed for this app)
+            const SESSION_ID = "performer1";
+
+            // WebSocket connection for director
+            let socket;
+            let reconnectTimer = null;
+            let heartbeatInterval = null;
+
+            const buttons = {
+                ahaukin: document.getElementById("ahaukin"),
+                ixchel: document.getElementById("ixchel"),
+                chacbolay: document.getElementById("chacbolay"),
+                off: document.getElementById("off"),
+            };
+
+            // Pause state tracking
+            let isPaused = false;
+            const pauseButton = document.getElementById("pauseButton");
+
+            // Intensity control elements
+            const intensitySlider = document.getElementById("intensitySlider");
+            const intensityValue = document.getElementById("intensityValue");
+
+            // Export functions to global scope for HTML onclick attributes
+            window.sendCommand = sendCommand;
+            window.sendMotalCommand = sendMotalCommand;
+            window.togglePause = togglePause;
+
+            // Function to send command to switch sources
+            function sendCommand(index) {
+                console.log(`Sending command to switch to source ${index}`);
+                fetch(`${API_URL}/switch_source/performer1/${index}`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({ index: index }),
+                })
+                    .then((response) => response.json())
+                    .then((data) => {
+                        console.log("Source switch success:", data);
+
+                        // Highlight the active button
+                        const buttonIds = [
+                            "ahaukin",
+                            "ixchel",
+                            "chacbolay",
+                            "off",
+                        ];
+
+                        // Reset all buttons
+                        buttonIds.forEach((id) => {
+                            const button = document.getElementById(id);
+                            if (button) button.style.opacity = "1.0";
+                        });
+
+                        // Highlight the active one
+                        if (index >= 0 && index < buttonIds.length) {
+                            const button = document.getElementById(
+                                buttonIds[index],
+                            );
+                            if (button) button.style.opacity = "0.7";
+                        }
+                    })
+                    .catch((error) =>
+                        console.error("Error switching source:", error),
+                    );
+            }
+
+            function sendMotalCommand(value) {
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    socket.send(
+                        JSON.stringify({
+                            action: "set_motal",
+                            value: value,
+                            initiator: "director",
+                        }),
+                    );
+                }
+            }
+
+            function togglePause() {
+                isPaused = !isPaused;
+
+                // Update button appearance
+                if (isPaused) {
+                    pauseButton.textContent = "RESUME ANIMATION";
+                    pauseButton.classList.add("paused");
+                } else {
+                    pauseButton.textContent = "PAUSE ANIMATION";
+                    pauseButton.classList.remove("paused");
+                }
+
+                // Send command to server
+                fetch(`${API_URL}/toggle_pause/performer1`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({ paused: isPaused }),
+                })
+                    .then((response) => response.json())
+                    .then((data) => console.log("Pause state changed:", data))
+                    .catch((error) =>
+                        console.error("Error toggling pause:", error),
+                    );
+            }
+
+            // Initialize WebSocket connection
+            function connectWebSocket() {
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    console.log("WebSocket already connected");
+                    return;
+                }
+
+                console.log(
+                    `Connecting to WebSocket at ${WS_URL}/ws/director/${SESSION_ID}`,
+                );
+                const ws = new WebSocket(`${WS_URL}/ws/director/${SESSION_ID}`);
+
+                // Use the imported setupWebSocketHandler to manage the connection
+                socket = setupWebSocketHandler(ws, {
+                    onIntensityUpdate: (intensity) => {
+                        // Update the slider when intensity is changed by others
+                        intensitySlider.value = Math.round(intensity * 100);
+                        intensityValue.textContent = intensity.toFixed(1);
+                    },
+                    onSourceSwitched: (data) => {
+                        console.log(`Source switched to: ${data.sourceName}`);
+                    },
+                });
+
+                // Set up event listeners for the websocket events
+                document.addEventListener("websocket:open", () => {
+                    console.log("WebSocket connected");
+                    if (reconnectTimer) {
+                        clearTimeout(reconnectTimer);
+                        reconnectTimer = null;
+                    }
+                });
+
+                document.addEventListener("websocket:close", () => {
+                    console.log("WebSocket disconnected");
+
+                    // Try to reconnect after 3 seconds
+                    if (!reconnectTimer) {
+                        reconnectTimer = setTimeout(connectWebSocket, 3000);
+                    }
+                });
+
+                document.addEventListener("websocket:error", (e) => {
+                    console.error("WebSocket error:", e.detail.error);
+                });
+
+                // Specific handler for source switching with detailed logging
+                document.addEventListener("websocket:source_switched", (e) => {
+                    console.log(
+                        `Source switched to: ${e.detail.sourceName} (index: ${e.detail.sourceIndex}, initiated by: ${e.detail.initiatedBy || "unknown"})`,
+                    );
+
+                    // Highlight the active button based on the source index
+                    const sourceIndex = e.detail.sourceIndex;
+                    const buttonIds = ["ahaukin", "ixchel", "chacbolay", "off"];
+
+                    // Reset all buttons
+                    buttonIds.forEach((id) => {
+                        const button = document.getElementById(id);
+                        if (button) button.style.opacity = "1.0";
+                    });
+
+                    // Highlight the active one if it's in range
+                    if (sourceIndex >= 0 && sourceIndex < buttonIds.length) {
+                        const button = document.getElementById(
+                            buttonIds[sourceIndex],
+                        );
+                        if (button) button.style.opacity = "0.7"; // Make it slightly transparent to show it's active
+                    }
+                });
+            }
+
+            // Send intensity update over WebSocket
+            function sendIntensityUpdate(value) {
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    socket.sendJson({
+                        action: "intensity_update",
+                        value: value,
+                        initiated_by: "director",
+                    });
+                    console.log(`Sent intensity update: ${value}`);
+                } else {
+                    console.warn(
+                        "Cannot send intensity update: socket not connected",
+                    );
+                }
+            }
+
+            // Initialize intensity slider
+            intensitySlider.addEventListener("input", function () {
+                const intensity = this.value / 100;
+                intensityValue.textContent = intensity.toFixed(1);
+                sendIntensityUpdate(intensity);
+            });
+
+            // Connect WebSocket on page load
+            window.addEventListener("load", connectWebSocket);
+        </script>
+    </body>
 </html>

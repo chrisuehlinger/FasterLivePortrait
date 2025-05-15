@@ -780,6 +780,7 @@ function connectToWebSocket() {
     
     const ws = new WebSocket(`${WS_URL}/ws/viewer/${sessionId}`);
     
+    console.log(`Setting up WebSocket handler for viewer at ${WS_URL}/ws/viewer/${sessionId}`);
     // Use the websocket handler to manage the connection
     websocket = window.setupWebSocketHandler(ws, {
         onBinaryData: async (data) => {
@@ -874,6 +875,17 @@ function connectToWebSocket() {
     // Add handler for generic messages
     document.addEventListener('websocket:message', (e) => {
         console.log('Received generic message:', e.detail);
+    });
+    
+    // Add handler for set_motal messages
+    document.addEventListener('websocket:set_motal', (e) => {
+        console.log('Received set_motal message from WebSocket:', e.detail);
+    });
+    
+    // Add handler for set_motal messages
+    document.addEventListener('websocket:set_motal', (e) => {
+        console.log('Received set_motal message:', e.detail);
+        // The actual handling of this message is done in viewer.html
     });
 }
 

@@ -514,6 +514,21 @@ class Server:
                             if data.get("action") == "intensity_update":
                                 intensity: float = float(data.get("value", 1.0))
                                 await self.connection_manager.handle_intensity_update(session_id, intensity, websocket)
+                            
+                            # Handle set_motal messages
+                            elif data.get("action") == "set_motal":
+                                motal_value = data.get("value")
+                                logger.info(f"Director set motal to {motal_value} for session {session_id}")
+                                # Broadcast to all viewers and directors
+                                await self.connection_manager.broadcast_message(
+                                    session_id, 
+                                    {
+                                        "action": "set_motal",
+                                        "value": motal_value,
+                                        "initiated_by": "director"
+                                    },
+                                    exclude_websocket=websocket
+                                )
                                 
                         except json.JSONDecodeError:
                             logger.warning(f"Received invalid JSON from director: {message}")

@@ -21,6 +21,7 @@ const MESSAGE_TYPES = {
   PAUSED: 'paused',
   RESUMED: 'resumed',
   ERROR: 'error',
+  SET_MOTAL: 'set_motal',
   // Add any additional message types here
   STATUS_UPDATE: 'status'
 };
@@ -152,7 +153,8 @@ function setupWebSocketHandler(socket, options = {}) {
         message: data.message || "",
         sourceIndex: data.current_source,
         sourceName: data.source_name,
-        intensity: data.value
+        intensity: data.action === "intensity_update" ? data.value : undefined,
+        motalEnabled: data.action === "set_motal" ? (data.value === true || data.value === "true" || data.value === 1 || data.value === "1") : undefined
       };
       
       if (messageType) {
@@ -250,10 +252,24 @@ function setupWebSocketHandler(socket, options = {}) {
                 } 
               }));
               break;
+              
+          case MESSAGE_TYPES.SET_MOTAL:
+              console.log(`Motal status updated: ${data.value}`);
+              
+              // Dispatch a motal update event
+              document.dispatchEvent(new CustomEvent('websocket:set_motal', { 
+                detail: { 
+                  motalEnabled: data.value === true || data.value === "true" || data.value === 1 || data.value === "1",
+                  // Pass the complete normalized data
+                  ...normalizedData
+                } 
+              }));
+              break;
             
             default:
               // For any other action type, dispatch two events:
               // 1. A specific event for the action type
+              console.log(`Dispatching event websocket:${messageType} with data:`, normalizedData);
               document.dispatchEvent(new CustomEvent(`websocket:${messageType}`, { 
                 detail: normalizedData
               }));
