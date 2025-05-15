@@ -9,6 +9,9 @@ import os.path
 import pdb
 import time
 import traceback
+from typing import Dict, List, Optional, Any, Union, Tuple, Set, Deque, Callable, TypeVar, cast, Protocol, Literal
+from typing_extensions import TypedDict
+from omegaconf import DictConfig
 from PIL import Image
 import cv2
 from tqdm import tqdm
@@ -22,19 +25,120 @@ from ..utils.utils import resize_to_limit, prepare_paste_back, get_rotation_matr
 from src.utils import utils
 
 
+# Define protocol for models
+class BaseModel(Protocol):
+    def forward(self, *args, **kwargs) -> Any:
+        ...
+        
+# Define TypedDict for model dictionary
+class ModelDict(TypedDict, total=False):
+    """Dictionary of models used in the pipeline"""
+    net_recon: BaseModel
+    net_distort: BaseModel
+    net_disentangle: BaseModel
+    xpose: BaseModel
+    face_analysis: BaseModel
+    landmark: BaseModel
+    motion_extractor: BaseModel
+    warping_spade: BaseModel
+    stitching: BaseModel
+    stitching_eye_retarget: BaseModel
+    stitching_lip_retarget: BaseModel
+
+# Define TypedDict for motion information
+class MotionInfo(TypedDict, total=False):
+    """Motion information extracted from frames"""
+    pitch: np.ndarray
+    yaw: np.ndarray
+    roll: np.ndarray
+    t: np.ndarray
+    exp: np.ndarray
+    scale: np.ndarray
+    kp: np.ndarray
+    R: Optional[np.ndarray]  # Rotation matrix
+    R_d: Optional[np.ndarray]  # Alternative name for rotation matrix
+
+# Define TypedDict for source information tuple components
+class SourceInfoData(TypedDict, total=False):
+    """Information extracted from a source image/frame"""
+    x_s_info: MotionInfo
+    source_lmk: np.ndarray
+    R_s: np.ndarray  # Rotation matrix for source
+    f_s: np.ndarray  # Features for source
+    x_s: np.ndarray  # Keypoints for source
+    x_c_s: np.ndarray  # Canonical keypoints for source
+    lip_delta_before_animation: Optional[np.ndarray]
+    flag_lip_zero: bool
+    mask_ori_float: Optional[torch.Tensor]
+    M: torch.Tensor  # Transformation matrix
+
+# Define TypedDict for driving motion information from pickle
+class DrivingMotionInfo(TypedDict, total=False):
+    """Motion information for driving animation"""
+    motion_lst: List[np.ndarray]
+    c_eyes_lst: Optional[List[np.ndarray]]
+    c_d_eyes_lst: Optional[List[np.ndarray]]
+    c_lip_lst: Optional[List[np.ndarray]]
+    c_d_lip_lst: Optional[List[np.ndarray]]
+    output_fps: int
+    face_analysis: BaseModel
+    landmark: BaseModel
+    motion_extractor: BaseModel
+    warping_spade: BaseModel
+    stitching: BaseModel
+    stitching_eye_retarget: BaseModel
+    stitching_lip_retarget: BaseModel
+
+# Define TypedDict for motion information
+class MotionInfo(TypedDict, total=False):
+    """Motion information extracted from frames"""
+    pitch: np.ndarray
+    yaw: np.ndarray
+    roll: np.ndarray
+    t: np.ndarray
+    exp: np.ndarray
+    scale: np.ndarray
+    kp: np.ndarray
+    R: Optional[np.ndarray]  # Rotation matrix
+    R_d: Optional[np.ndarray]  # Alternative name for rotation matrix
+
+# Define TypedDict for source information tuple components
+class SourceInfoData(TypedDict, total=False):
+    """Information extracted from a source image/frame"""
+    x_s_info: MotionInfo
+    source_lmk: np.ndarray
+    R_s: np.ndarray  # Rotation matrix for source
+    f_s: np.ndarray  # Features for source
+    x_s: np.ndarray  # Keypoints for source
+    x_c_s: np.ndarray  # Canonical keypoints for source
+    lip_delta_before_animation: Optional[np.ndarray]
+    flag_lip_zero: bool
+    mask_ori_float: Optional[torch.Tensor]
+    M: torch.Tensor  # Transformation matrix
+
+# Define TypedDict for driving motion information
+class DrivingMotionInfo(TypedDict, total=False):
+    """Motion information for driving animation"""
+    motion_lst: List[np.ndarray]
+    c_eyes_lst: Optional[List[np.ndarray]]
+    c_d_eyes_lst: Optional[List[np.ndarray]]
+    c_lip_lst: Optional[List[np.ndarray]]
+    c_d_lip_lst: Optional[List[np.ndarray]]
+    output_fps: int
+
 class FasterLivePortraitPipeline:
-    def __init__(self, cfg, **kwargs):
+    def __init__(self, cfg: DictConfig, **kwargs: Any) -> None:
         self.cfg = cfg
         self.init(**kwargs)
         # Initialize pause_animation flag as False by default
-        self.pause_animation = False
+        self.pause_animation: bool = False
 
-    def init(self, **kwargs):
+    def init(self, **kwargs: Any) -> None:
         self.init_vars(**kwargs)
         self.init_models(**kwargs)
 
-    def update_cfg(self, args_user):
-        update_ret = False
+    def update_cfg(self, args_user: Dict[str, Any]) -> bool:
+        update_ret: bool = False
         for key in args_user:
             if key in self.cfg.infer_params:
                 if self.cfg.infer_params[key] != args_user[key]:
@@ -53,21 +157,22 @@ class FasterLivePortraitPipeline:
                 self.cfg.infer_params[key] = args_user[key]
         return update_ret
 
-    def clean_models(self, **kwargs):
+    def clean_models(self, **kwargs: Any) -> None:
         """
         clean model
         :param kwargs:
         :return:
         """
-        for key in list(self.model_dict.keys()):
-            del self.model_dict[key]
-        self.model_dict = {}
+        if hasattr(self, 'model_dict'):
+            for key in list(self.model_dict.keys()):
+                del self.model_dict[key]
+        self.model_dict: ModelDict = {}
 
-    def init_models(self, **kwargs):
+    def init_models(self, **kwargs: Any) -> None:
         if not kwargs.get("is_animal", False):
             print("load Human Model >>>")
-            self.is_animal = False
-            self.model_dict = {}
+            self.is_animal: bool = False
+            self.model_dict: ModelDict = {}
             for model_name in self.cfg.models:
                 print(f"loading model: {model_name}")
                 print(self.cfg.models[model_name])
@@ -75,11 +180,11 @@ class FasterLivePortraitPipeline:
                     **self.cfg.models[model_name])
         else:
             print("load Animal Model >>>")
-            self.is_animal = True
-            self.model_dict = {}
+            self.is_animal: bool = True
+            self.model_dict: ModelDict = {}
             from src.utils.animal_landmark_runner import XPoseRunner
             from src.utils.utils import make_abs_path
-            checkpoint_dir = None
+            checkpoint_dir: Optional[str] = None
             for model_name in self.cfg.animal_models:
                 print(f"loading model: {model_name}")
                 print(self.cfg.animal_models[model_name])
@@ -96,37 +201,68 @@ class FasterLivePortraitPipeline:
                                                    embeddings_cache_path=xpose_embedding_cache_path,
                                                    flag_use_half_precision=True)
 
-    def init_vars(self, **kwargs):
-        self.mask_crop = cv2.imread(self.cfg.infer_params.mask_crop_path, cv2.IMREAD_COLOR)
-        self.frame_id = 0
-        self.src_lmk_pre = None
-        self.R_d_0 = None
-        self.x_d_0_info = None
+    def init_vars(self, **kwargs: Any) -> None:
+        """Initialize pipeline variables"""
+        self.mask_crop: np.ndarray = cv2.imread(self.cfg.infer_params.mask_crop_path, cv2.IMREAD_COLOR)
+        self.frame_id: int = 0
+        self.src_lmk_pre: Optional[np.ndarray] = None
+        self.R_d_0: Optional[np.ndarray] = None
+        self.x_d_0_info: Optional[Dict[str, Any]] = None
         self.R_d_smooth = utils.OneEuroFilter(4, 0.3)
         self.exp_smooth = utils.OneEuroFilter(4, 0.3)
 
-        ## 记录source的信息
-        self.source_path = None
-        self.src_infos = []
-        self.src_imgs = []
-        self.is_source_video = False
-        self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        # Source information
+        self.source_path: Optional[str] = None
+        self.src_infos: List[Dict[str, Any]] = []
+        self.src_imgs: List[np.ndarray] = []
+        self.is_source_video: bool = False
+        self.device: torch.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
-    def calc_combined_eye_ratio(self, c_d_eyes_i, source_lmk):
+    def calc_combined_eye_ratio(self, c_d_eyes_i: List[List[float]], source_lmk: np.ndarray) -> np.ndarray:
+        """
+        Calculate combined eye ratio tensor for retargeting
+        
+        Parameters:
+        -----------
+        c_d_eyes_i: List[List[float]]
+            Target eye ratio values
+        source_lmk: np.ndarray
+            Source landmarks
+            
+        Returns:
+        --------
+        np.ndarray:
+            Combined eye ratio tensor with shape (1, 2)
+        """
         c_s_eyes = calc_eye_close_ratio(source_lmk[None])
         c_d_eyes_i = np.array(c_d_eyes_i).reshape(1, 1)
         # [c_s,eyes, c_d,eyes,i]
         combined_eye_ratio_tensor = np.concatenate([c_s_eyes, c_d_eyes_i], axis=1)
         return combined_eye_ratio_tensor
 
-    def calc_combined_lip_ratio(self, c_d_lip_i, source_lmk):
+    def calc_combined_lip_ratio(self, c_d_lip_i: Union[List[float], float], source_lmk: np.ndarray) -> np.ndarray:
+        """
+        Calculate combined lip ratio tensor for retargeting
+        
+        Parameters:
+        -----------
+        c_d_lip_i: Union[List[float], float]
+            Target lip ratio values
+        source_lmk: np.ndarray
+            Source landmarks
+            
+        Returns:
+        --------
+        np.ndarray:
+            Combined lip ratio tensor with shape (1, 2)
+        """
         c_s_lip = calc_lip_close_ratio(source_lmk[None])
         c_d_lip_i = np.array(c_d_lip_i).reshape(1, 1)  # 1x1
         # [c_s,lip, c_d,lip,i]
         combined_lip_ratio_tensor = np.concatenate([c_s_lip, c_d_lip_i], axis=1)  # 1x2
         return combined_lip_ratio_tensor
 
-    def prepare_source(self, source_path, **kwargs):
+    def prepare_source(self, source_path: str, **kwargs: Any) -> bool:
         print(f"process source:{source_path} >>>>>>>>")
         try:
             # Check if the source is an SPD file
@@ -290,31 +426,62 @@ class FasterLivePortraitPipeline:
             traceback.print_exc()
             return False
 
-    def retarget_eye(self, kp_source, eye_close_ratio):
+    def retarget_eye(self, kp_source: np.ndarray, eye_close_ratio: np.ndarray) -> np.ndarray:
         """
-        kp_source: BxNx3
-        eye_close_ratio: Bx3
-        Return: Bx(3*num_kp+2)
+        Retarget eye expressions
+        
+        Parameters:
+        -----------
+        kp_source: np.ndarray
+            Source keypoints with shape (batch_size, num_keypoints, 3)
+        eye_close_ratio: np.ndarray
+            Eye close ratio tensor with shape (batch_size, 2) containing source and target ratios
+            
+        Returns:
+        --------
+        np.ndarray:
+            Delta values for eye expressions
         """
         feat_eye = concat_feat(kp_source, eye_close_ratio)
         delta = self.model_dict['stitching_eye_retarget'].predict(feat_eye)
         return delta
 
-    def retarget_lip(self, kp_source, lip_close_ratio):
+    def retarget_lip(self, kp_source: np.ndarray, lip_close_ratio: np.ndarray) -> np.ndarray:
         """
-        kp_source: BxNx3
-        lip_close_ratio: Bx2
+        Retarget lip expressions
+        
+        Parameters:
+        -----------
+        kp_source: np.ndarray
+            Source keypoints with shape (batch_size, num_keypoints, 3)
+        lip_close_ratio: np.ndarray
+            Lip close ratio tensor with shape (batch_size, 2) containing source and target ratios
+            
+        Returns:
+        --------
+        np.ndarray:
+            Delta values for lip expressions
         """
         feat_lip = concat_feat(kp_source, lip_close_ratio)
         delta = self.model_dict['stitching_lip_retarget'].predict(feat_lip)
         return delta
 
-    def stitching(self, kp_source, kp_driving):
-        """ conduct the stitching
-        kp_source: Bxnum_kpx3
-        kp_driving: Bxnum_kpx3
+    def stitching(self, kp_source: np.ndarray, kp_driving: np.ndarray) -> np.ndarray:
+        """ 
+        Conduct the stitching between source and driving keypoints
+        
+        Parameters:
+        -----------
+        kp_source: np.ndarray
+            Source keypoints with shape (batch_size, num_keypoints, 3)
+        kp_driving: np.ndarray
+            Driving keypoints with shape (batch_size, num_keypoints, 3)
+            
+        Returns:
+        --------
+        np.ndarray:
+            New driving keypoints after stitching
         """
-
         bs, num_kp = kp_source.shape[:2]
 
         kp_driving_new = kp_driving.copy()
@@ -329,8 +496,46 @@ class FasterLivePortraitPipeline:
 
         return kp_driving_new
 
-    def _run(self, src_info, x_d_i_info, x_d_0_info, R_d_i, R_d_0, realtime, input_eye_ratio, input_lip_ratio,
-             I_p_pstbk, **kwargs):
+    def _run(self, 
+             src_info: List[List], 
+             x_d_i_info: MotionInfo, 
+             x_d_0_info: MotionInfo, 
+             R_d_i: np.ndarray, 
+             R_d_0: np.ndarray, 
+             realtime: bool, 
+             input_eye_ratio: np.ndarray, 
+             input_lip_ratio: np.ndarray,
+             I_p_pstbk: torch.Tensor, 
+             **kwargs: Any) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Main pipeline processing function
+        
+        Parameters:
+        -----------
+        src_info: List[List]
+            List of source information for each keypoint
+        x_d_i_info: MotionInfo
+            Motion information for current driving frame
+        x_d_0_info: MotionInfo
+            Motion information for reference driving frame
+        R_d_i: np.ndarray
+            Rotation matrix for current driving frame
+        R_d_0: np.ndarray
+            Rotation matrix for reference driving frame
+        realtime: bool
+            Whether processing in realtime mode
+        input_eye_ratio: np.ndarray
+            Eye ratio for current driving frame
+        input_lip_ratio: np.ndarray
+            Lip ratio for current driving frame
+        I_p_pstbk: torch.Tensor
+            Pasteback image
+            
+        Returns:
+        --------
+        Tuple[np.ndarray, np.ndarray]:
+            Output crop and pasteback images
+        """
         out_crop, out_org = None, None
         eye_delta_before_animation = None
         for j in range(len(src_info)):
@@ -505,7 +710,28 @@ class FasterLivePortraitPipeline:
                 I_p_pstbk = paste_back_pytorch(out_crop, M, I_p_pstbk, mask_ori_float)
         return out_crop.to(dtype=torch.uint8).cpu().numpy(), I_p_pstbk.to(dtype=torch.uint8).cpu().numpy()
 
-    def run(self, image, img_src, src_info, **kwargs):
+    def run(self, 
+            image: np.ndarray, 
+            img_src: np.ndarray, 
+            src_info: List[List], 
+            **kwargs: Any) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], Optional[Tuple]]:
+        """
+        Process a driving frame
+        
+        Parameters:
+        -----------
+        image: np.ndarray
+            Driving frame 
+        img_src: np.ndarray
+            Source image
+        src_info: List[List]
+            Source information for keypoint manipulation
+        
+        Returns:
+        --------
+        Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], Optional[Tuple]]:
+            Tuple containing (driving crop, output crop, output full, motion info)
+        """
         # Check if animation is paused - return source image if paused
         if self.pause_animation and img_src is not None:
             # If paused, return the source image without modification
@@ -528,7 +754,7 @@ class FasterLivePortraitPipeline:
         img_bgr = image
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         I_p_pstbk = torch.from_numpy(img_src).to(self.device).float()
-        realtime = kwargs.get("realtime", False)
+        realtime: bool = kwargs.get("realtime", False)
         if self.cfg.infer_params.flag_crop_driving_video:
             # if self.src_lmk_pre is None:
             src_face = self.model_dict["face_analysis"].predict(img_bgr)
@@ -611,7 +837,31 @@ class FasterLivePortraitPipeline:
                                         I_p_pstbk, **kwargs)
         return img_crop, out_crop, I_p_pstbk, dri_motion_info
 
-    def run_with_pkl(self, dri_motion_info, img_src, src_info, **kwargs):
+    def run_with_pkl(self, 
+                 dri_motion_info: List[Any], 
+                 img_src: np.ndarray, 
+                 src_info: List[List], 
+                 **kwargs: Any) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Process frames using pre-computed motion info from a pickle file
+        
+        Parameters:
+        -----------
+        dri_motion_info: List[Any]
+            List containing motion information from pickle file
+            [0] - x_d_i_info: MotionInfo - Motion information
+            [1] - input_eye_ratio: np.ndarray - Eye ratio
+            [2] - input_lip_ratio: np.ndarray - Lip ratio
+        img_src: np.ndarray
+            Source image
+        src_info: List[List]
+            Source information for keypoint manipulation
+            
+        Returns:
+        --------
+        Tuple[np.ndarray, np.ndarray]:
+            Output crop and pasteback images
+        """
         # Check if animation is paused - return source image if paused
         if self.pause_animation and img_src is not None:
             # If paused, return the source image without modification
@@ -625,7 +875,7 @@ class FasterLivePortraitPipeline:
 
         # If not paused, continue with regular processing
         I_p_pstbk = torch.from_numpy(img_src).to(self.device).float()
-        realtime = kwargs.get("realtime", False)
+        realtime: bool = kwargs.get("realtime", False)
 
         input_eye_ratio = dri_motion_info[1]
         input_lip_ratio = dri_motion_info[2]

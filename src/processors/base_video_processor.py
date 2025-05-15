@@ -1,17 +1,20 @@
 import cv2
 import time
+import numpy as np
+from typing import Optional
+
 class BaseVideoProcessor:
-    def __init__(self):
-        self.frame_counter = 0
-        self.fps_counter = 0
-        self.fps_start_time = time.time()
-        self.fps = 0
+    def __init__(self) -> None:
+        self.frame_counter: int = 0
+        self.fps_counter: int = 0
+        self.fps_start_time: float = time.time()
+        self.fps: int = 0
         
-    def process_frame(self, frame):
+    def process_frame(self, frame: np.ndarray) -> Optional[np.ndarray]:
         """Process a single frame using simple transformations"""
         # Calculate FPS
         self.fps_counter += 1
-        current_time = time.time()
+        current_time: float = time.time()
         if current_time - self.fps_start_time >= 1.0:
             self.fps = self.fps_counter
             self.fps_counter = 0
@@ -32,7 +35,7 @@ class BaseVideoProcessor:
             processed_img = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
         
         # Add FPS counter and frame number to output
-        info_text = f"FPS: {self.fps} | Frame: {self.frame_counter} | Size: {width}x{height}"
+        info_text: str = f"FPS: {self.fps} | Frame: {self.frame_counter} | Size: {width}x{height}"
         cv2.putText(
             processed_img,
             info_text,

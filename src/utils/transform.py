@@ -1,10 +1,12 @@
 import cv2
 import math
 import numpy as np
+from typing import Tuple, List, Dict, Any, Union, Optional
 from skimage import transform as trans
 
 
-def transform(data, center, output_size, scale, rotation):
+def transform(data: np.ndarray, center: Tuple[float, float], output_size: int, scale: float, 
+              rotation: float) -> Tuple[np.ndarray, np.ndarray]:
     scale_ratio = scale
     rot = float(rotation) * np.pi / 180.0
     # translation = (output_size/2-center[0]*scale_ratio, output_size/2-center[1]*scale_ratio)
@@ -23,7 +25,7 @@ def transform(data, center, output_size, scale, rotation):
     return cropped, M
 
 
-def trans_points2d(pts, M):
+def trans_points2d(pts: np.ndarray, M: np.ndarray) -> np.ndarray:
     new_pts = np.zeros(shape=pts.shape, dtype=np.float32)
     for i in range(pts.shape[0]):
         pt = pts[i]

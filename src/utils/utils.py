@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import pdb
+from typing import Dict, List, Optional, Any, Union, Tuple, Set, Deque, Callable, TypeVar, cast
 
 import cv2
 import numpy as np
@@ -9,7 +10,7 @@ import os.path as osp
 import torch
 
 
-def get_opt_device_dtype():
+def get_opt_device_dtype() -> Tuple[torch.device, torch.dtype]:
     if torch.cuda.is_available():
         return torch.device("cuda"), torch.float16
     elif torch.backends.mps.is_available():
@@ -18,7 +19,7 @@ def get_opt_device_dtype():
         return torch.device("cpu"), torch.float32
 
 
-def video_has_audio(video_file):
+def video_has_audio(video_file: str) -> bool:
     try:
         ret = ffmpeg.probe(video_file, select_streams='a')
         return len(ret["streams"]) > 0
@@ -26,7 +27,7 @@ def video_has_audio(video_file):
         return False
 
 
-def get_video_info(video_path):
+def get_video_info(video_path: str) -> Dict[str, Any]:
     # 使用 ffmpeg.probe 获取视频信息
     probe = ffmpeg.probe(video_path)
     video_streams = [stream for stream in probe['streams'] if stream['codec_type'] == 'video']

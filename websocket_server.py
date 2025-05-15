@@ -11,7 +11,12 @@ import os
 import cv2
 import numpy as np
 import time
-from omegaconf import OmegaConf
+from typing import Dict, List, Optional, Any, Union, Protocol, Mapping
+from typing_extensions import TypedDict
+from omegaconf import DictConfig
+import argparse
+from dataclasses import dataclass
+from omegaconf import OmegaConf, DictConfig
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,23 +31,60 @@ from src.connection_manager import ConnectionManager
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("websocket_server")
 
-# Connection manager for WebSockets
+# Define types for server configuration
+@dataclass
+class ServerConfig:
+    """Strongly typed server configuration parsed from command line arguments"""
+    host: str
+    port: int
+    config_path: str
+    source_image: str
+    source_image_2: Optional[str]
+    source_image_3: Optional[str]
+    source_image_4: Optional[str]
+    debug: bool
+    is_animal: bool
+    use_basic_processor: bool
+    ssl_cert: Optional[str]
+    ssl_key: Optional[str]
+    proxy_target: Optional[str]
+    proxy_sources: Optional[str]
+
+    @classmethod
+    def from_args(cls, args: argparse.Namespace) -> 'ServerConfig':
+        """Create a ServerConfig from parsed command line arguments"""
+        return cls(
+            host=args.host,
+            port=args.port,
+            config_path=args.config_path,
+            source_image=args.source_image,
+            source_image_2=args.source_image_2,
+            source_image_3=args.source_image_3,
+            source_image_4=args.source_image_4,
+            debug=args.debug,
+            is_animal=args.is_animal,
+            use_basic_processor=args.use_basic_processor,
+            ssl_cert=args.ssl_cert,
+            ssl_key=args.ssl_key,
+            proxy_target=args.proxy_target,
+            proxy_sources=args.proxy_sources
+        )
 
 # Server application setup
 class Server:
-    def __init__(self, config):
-        self.app = FastAPI()
-        self.connection_manager = ConnectionManager()
-        self.config = config
+    def __init__(self, config: ServerConfig) -> None:
+        self.app: FastAPI = FastAPI()
+        self.connection_manager: ConnectionManager = ConnectionManager()
+        self.config: ServerConfig = config
         
         self._setup_routes()
         self._setup_middleware()
         
         # Save proxy configuration
-        self.proxy_target = getattr(config, "proxy_target", None)
-        self.proxy_sources = []
+        self.proxy_target: Optional[str] = config.proxy_target
+        self.proxy_sources: List[int] = []
         
-        if getattr(config, "proxy_sources", None):
+        if config.proxy_sources:
             try:
                 self.proxy_sources = [int(idx) for idx in config.proxy_sources.split(',')]
                 logger.info(f"Configured sources {self.proxy_sources} to be proxied to {self.proxy_target}")
@@ -68,7 +110,7 @@ class Server:
                 raise FileNotFoundError(f"Source image not found: {config.source_image}")
                 
             # Log all available source images
-            source_images = []
+            source_images: List[str] = []
             source_images.append(config.source_image)
             
             # Check additional source images if provided
@@ -114,7 +156,7 @@ class Server:
                         cv2.imwrite(path, result)
                         logger.info(f"Updated source image {i+1} with transparent pixels replaced by green")
                 
-                self.processor = FasterLivePortraitProcessor(
+                self.processor: FasterLivePortraitProcessor = FasterLivePortraitProcessor(
                     config_path=config.config_path,
                     src_image_path=config.source_image,
                     src_image_2_path=config.source_image_2 if config.source_image_2 and os.path.isfile(config.source_image_2) else None,
@@ -126,7 +168,7 @@ class Server:
                 logger.info(f"Successfully initialized FasterLivePortrait processor with {len(source_images)} source images")
                 
                 # Determine if multiple sources are available
-                self.has_multiple_sources = len(source_images) > 1
+                self.has_multiple_sources: bool = len(source_images) > 1
                 if self.has_multiple_sources:
                     logger.info(f"Multiple source images available: {len(source_images)}")
                     
@@ -143,7 +185,7 @@ class Server:
             logger.error(f"Failed to initialize FasterLivePortrait processor: {e}")
             exit(1)
         
-    def _setup_middleware(self):
+    def _setup_middleware(self) -> None:
         self.app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],
@@ -152,53 +194,79 @@ class Server:
             allow_headers=["*"],
         )
         
-    def _setup_routes(self):
+    def _setup_routes(self) -> None:
         @self.app.get("/")
-        async def get_index():
+        async def get_index() -> Dict[str, str]:
             return {"message": "FasterLivePortrait WebSocket Server"}
         
+        # Define request and response types
+        class SessionRequest(TypedDict, total=False):
+            session_id: Optional[str]
+            
+        class SessionResponse(TypedDict):
+            session_id: str
+            status: str
+            
         @self.app.post("/create_session")
-        async def create_session(request: dict = Body(...)):
+        async def create_session(request: SessionRequest = Body(...)) -> SessionResponse:
             """Create a new session ID or validate an existing one"""
             # Allow custom session ID if provided, otherwise generate one
-            session_id = request.get("session_id", str(uuid.uuid4()))
+            session_id: str = str(request.get("session_id", str(uuid.uuid4())))
             return {
                 "session_id": session_id,
                 "status": "success"
             }
         
+        # Define switch source request and response types
+        class SwitchSourceRequest(TypedDict, total=False):
+            session_id: str
+            index: int
+            
+        class SwitchSourceResponse(TypedDict):
+            session_id: str
+            status: str
+            
         @self.app.post("/switch_source/{session_id}/{index}")
-        async def switch_source(request: dict = Body(...)):
+        async def switch_source(request: SwitchSourceRequest = Body(...)) -> SwitchSourceResponse:
             # Allow custom session ID if provided, otherwise generate one
-            session_id = request.get("session_id", "performer1")
-            index = int(request.get("index", 0))
-            old_index = self.processor.current_source_index
+            session_id_param: str = str(request.get("session_id", "performer1"))
+            index_param: int = int(request.get("index", 0))
+            source_old_index: int = self.processor.current_source_index
             
             # Update proxy status if needed
-            await self.connection_manager.handle_proxy_switch(session_id, old_index, index)
+            await self.connection_manager.handle_proxy_switch(session_id_param, source_old_index, index_param)
             
-            self.processor.switch_source(index)
+            self.processor.switch_source(index_param)
                                         
             # Notify viewers about the source switch
             await self.connection_manager.notify_viewers_source_switched(
-                session_id, index, os.path.basename(self.processor.src_image_paths[index])
+                session_id_param, index_param, os.path.basename(self.processor.src_image_paths[index_param])
             )
             
             # Notify actors about the source switch
             await self.connection_manager.notify_actors_source_switched(
-                session_id, index, os.path.basename(self.processor.src_image_paths[index])
+                session_id_param, index_param, os.path.basename(self.processor.src_image_paths[index_param])
             )
 
             return {
-                "session_id": session_id,
+                "session_id": session_id_param,
                 "status": "success"
             }
         
+        # Define request and response types for toggling pause state
+        class PauseRequest(TypedDict, total=False):
+            paused: bool
+            
+        class PauseResponse(TypedDict):
+            session_id: str
+            status: str
+            paused: bool
+            
         # Add a new route to toggle animation pause state
         @self.app.post("/toggle_pause/{session_id}")
-        async def toggle_pause(session_id: str, request: Request):
-            data = await request.json()
-            paused = data.get("paused", False)
+        async def toggle_pause(session_id: str, request: Request) -> PauseResponse:
+            data: PauseRequest = await request.json()
+            paused: bool = data.get("paused", False)
             
             if session_id in self.connection_manager.frame_processors:
                 processor = self.connection_manager.frame_processors[session_id]
@@ -212,12 +280,12 @@ class Server:
                         session_id, processor.current_source_index, os.path.basename(processor.src_image_paths[processor.current_source_index])
                     )
                     
-                    return {"success": True, "session_id": session_id, "paused": paused}
+                    return {"status": "success", "session_id": session_id, "paused": paused}
             
             return {"success": False, "error": "Session not found"}
             
         @self.app.websocket("/ws/actor/{session_id}")
-        async def actor_websocket(websocket: WebSocket, session_id: str):
+        async def actor_websocket(websocket: WebSocket, session_id: str) -> None:
             """WebSocket endpoint for actors to stream video frames"""
             try:
                 await self.connection_manager.connect_actor(session_id, websocket)
@@ -229,8 +297,19 @@ class Server:
                 if hasattr(self, 'proxy_sources') and self.proxy_sources and hasattr(self, 'proxy_target') and self.proxy_target:
                     self.connection_manager.set_proxy_sources(session_id, self.proxy_sources, self.proxy_target)
                 
+                # Define strongly typed actor response
+                class ActorResponse(TypedDict, total=False):
+                    status: str
+                    session_id: str
+                    has_multiple_sources: bool
+                    source_count: int
+                    sources: List[str]
+                    current_source: int
+                    proxy_sources: List[int]
+                    proxy_target: Optional[str]
+
                 # Send a confirmation to the actor
-                response = {
+                response: ActorResponse = {
                     "status": "connected", 
                     "session_id": session_id
                 }
@@ -251,19 +330,33 @@ class Server:
                 await websocket.send_json(response)
                 
                 # Setup last key press time to prevent too frequent source switching
-                last_key_press_time = 0
-                key_press_cooldown = 0.5  # seconds
+                last_key_press_time: float = 0.0
+                key_press_cooldown: float = 0.5  # seconds
                 
+                # Define message structure for WebSocket messages
+                class WebSocketMessage(TypedDict, total=False):
+                    type: str  # "websocket.receive", "websocket.disconnect", etc.
+                    text: Optional[str]  # For text messages (commands)
+                    bytes: Optional[bytes]  # For binary messages (frames)
+                    
                 while True:
                     # Receive data from actor - could be a frame or a command
-                    message = await websocket.receive()
+                    message: WebSocketMessage = await websocket.receive()
                     
                     # Check if this is a text message (command) or binary (frame)
                     if "text" in message:
                         try:
+                            # Define command structure
+                            class Command(TypedDict, total=False):
+                                action: str
+                                index: Optional[int]
+                                key: Optional[str]
+                                value: Optional[float]
+                                paused: Optional[bool]
+                            
                             # Parse text as JSON command
-                            command = json.loads(message["text"])
-                            current_time = time.time()
+                            command: Command = json.loads(message["text"])
+                            current_time: float = time.time()
                             
                             # Handle source switching commands
                             if command.get("action") == "switch_source" and hasattr(self, 'has_multiple_sources') and self.has_multiple_sources:
@@ -273,33 +366,33 @@ class Server:
                                     
                                     # Get the requested source index
                                     index = command.get("index")
-                                    old_index = self.processor.current_source_index
+                                    old_index: int = self.processor.current_source_index
                                     
                                     if index is None:
                                         # Switch to next source if no specific index
-                                        new_index = self.processor.switch_source()
+                                        source_new_index: int = self.processor.switch_source()
                                     elif 0 <= index < len(self.processor.src_image_paths):
                                         # Switch to the requested source
-                                        new_index = self.processor.switch_source(index)
+                                        source_new_index: int = self.processor.switch_source(index)
                                     
                                     # Handle proxy switching if needed
-                                    await self.connection_manager.handle_proxy_switch(session_id, old_index, new_index)
+                                    await self.connection_manager.handle_proxy_switch(session_id, old_index, source_new_index)
                                     
                                     # Send confirmation back to actor
                                     await websocket.send_json({
                                         "status": "source_switched",
-                                        "current_source": new_index,
-                                        "source_name": os.path.basename(self.processor.src_image_paths[new_index])
+                                        "current_source": source_new_index,
+                                        "source_name": os.path.basename(self.processor.src_image_paths[source_new_index])
                                     })
                                     
                                     # Notify viewers about the source switch
                                     await self.connection_manager.notify_viewers_source_switched(
-                                        session_id, new_index, os.path.basename(self.processor.src_image_paths[new_index])
+                                        session_id, source_new_index, os.path.basename(self.processor.src_image_paths[source_new_index])
                                     )
                                     
                             # Handle key press events for source switching
                             elif command.get("action") == "key_press" and hasattr(self, 'has_multiple_sources') and self.has_multiple_sources:
-                                key = command.get("key")
+                                key: str = command.get("key")
                                 # Check if we should process this key press (prevent too frequent switching)
                                 if current_time - last_key_press_time >= key_press_cooldown:
                                     last_key_press_time = current_time
@@ -308,22 +401,22 @@ class Server:
                                     if key in ["1", "2", "3", "4"]:
                                         index = int(key) - 1
                                         if 0 <= index < len(self.processor.src_image_paths):
-                                            old_index = self.processor.current_source_index
-                                            new_index = self.processor.switch_source(index)
+                                            source_old_index: int = self.processor.current_source_index
+                                            source_new_index: int = self.processor.switch_source(index)
                                             
                                             # Handle proxy switching if needed
-                                            await self.connection_manager.handle_proxy_switch(session_id, old_index, new_index)
+                                            await self.connection_manager.handle_proxy_switch(session_id, source_old_index, source_new_index)
                                             
                                             # Send confirmation back to actor
                                             await websocket.send_json({
                                                 "status": "source_switched",
-                                                "current_source": new_index,
-                                                "source_name": os.path.basename(self.processor.src_image_paths[new_index])
+                                                "current_source": source_new_index,
+                                                "source_name": os.path.basename(self.processor.src_image_paths[source_new_index])
                                             })
                                             
                                             # Notify viewers about the source switch
                                             await self.connection_manager.notify_viewers_source_switched(
-                                                session_id, new_index, os.path.basename(self.processor.src_image_paths[new_index])
+                                                session_id, source_new_index, os.path.basename(self.processor.src_image_paths[source_new_index])
                                             )
                                             
                         except json.JSONDecodeError:
@@ -333,11 +426,11 @@ class Server:
                             
                     elif "bytes" in message:
                         # Process binary data as video frame
-                        frame_data = message["bytes"]
+                        frame_data: bytes = message["bytes"]
                         
                         # Decode image from binary data
                         nparr = np.frombuffer(frame_data, np.uint8)
-                        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                        frame: np.ndarray = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                         
                         if frame is not None:
                             # Add frame to processing queue (will replace any pending frame)
@@ -351,13 +444,23 @@ class Server:
                 self.connection_manager.disconnect_actor(session_id)
                     
         @self.app.websocket("/ws/director/{session_id}")
-        async def director_websocket(websocket: WebSocket, session_id: str):
+        async def director_websocket(websocket: WebSocket, session_id: str) -> None:
             """WebSocket endpoint for directors to send commands and receive updates"""
             try:
                 await self.connection_manager.connect_director(session_id, websocket)
                 
+                # Define strongly typed director response
+                class DirectorResponse(TypedDict, total=False):
+                    status: str
+                    session_id: str
+                    message: str
+                    has_multiple_sources: bool
+                    source_count: int
+                    sources: List[str]
+                    current_source: int
+
                 # Send a confirmation to the director
-                response = {
+                response: DirectorResponse = {
                     "status": "connected", 
                     "session_id": session_id,
                     "message": "Connected to stream. Waiting for video..."
@@ -383,19 +486,24 @@ class Server:
                 
                 while True:
                     # This will wait for any message from the client (like heartbeats or commands)
-                    message = await websocket.receive_text()
+                    message: str = await websocket.receive_text()
                     
                     # If it's a heartbeat, respond
                     if message == "heartbeat":
                         await websocket.send_json({"status": "heartbeat_ack"})
                     else:
+                        # Define intensity update command structure
+                        class IntensityCommand(TypedDict, total=False):
+                            action: str
+                            value: float
+                        
                         # Try to parse as JSON command
                         try:
-                            data = json.loads(message)
+                            data: IntensityCommand = json.loads(message)
                             
                             # Handle intensity update
                             if data.get("action") == "intensity_update":
-                                intensity = float(data.get("value", 1.0))
+                                intensity: float = float(data.get("value", 1.0))
                                 await self.connection_manager.handle_intensity_update(session_id, intensity, websocket)
                                 
                         except json.JSONDecodeError:
@@ -411,13 +519,21 @@ class Server:
                 self.connection_manager.disconnect_director(session_id, websocket)
 
         @self.app.websocket("/ws/viewer/{session_id}")
-        async def viewer_websocket(websocket: WebSocket, session_id: str):
+        async def viewer_websocket(websocket: WebSocket, session_id: str) -> None:
             """WebSocket endpoint for viewers to receive processed frames"""
             try:
                 await self.connection_manager.connect_viewer(session_id, websocket)
                 
+                # Define strongly typed viewer response
+                class ViewerResponse(TypedDict, total=False):
+                    status: str
+                    session_id: str
+                    message: str
+                    current_source: int
+                    source_name: str
+                
                 # Send confirmation to the viewer
-                response = {
+                response: ViewerResponse = {
                     "status": "connected", 
                     "session_id": session_id,
                     "message": "Connected to stream. Waiting for video..."
@@ -440,19 +556,24 @@ class Server:
                 
                 while True:
                     # This will wait for any message from the client (like heartbeats or viewer commands)
-                    message = await websocket.receive_text()
+                    message: str = await websocket.receive_text()
                     
                     # If it's a heartbeat, respond
                     if message == "heartbeat":
                         await websocket.send_json({"status": "heartbeat_ack"})
                     else:
+                        # Define intensity update command structure
+                        class IntensityCommand(TypedDict, total=False):
+                            action: str
+                            value: float
+                        
                         # Try to parse as JSON command
                         try:
-                            data = json.loads(message)
+                            data: IntensityCommand = json.loads(message)
                             
                             # Handle intensity update (viewers might also send updates)
                             if data.get("action") == "intensity_update":
-                                intensity = float(data.get("value", 1.0))
+                                intensity: float = float(data.get("value", 1.0))
                                 await self.connection_manager.handle_intensity_update(session_id, intensity, websocket)
                                 
                         except json.JSONDecodeError:
@@ -479,7 +600,7 @@ class Server:
             self.app.mount("/", StaticFiles(directory="static", html=True), name="static")
             logger.info("Serving production frontend from static directory")
 
-def main():
+def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="FasterLivePortrait WebSocket Server")
     parser.add_argument("--host", default="0.0.0.0", help="Host to run server on")
@@ -501,19 +622,22 @@ def main():
     
     args = parser.parse_args()
     
-    server = Server(args)
+    # Create strongly typed server config
+    config = ServerConfig.from_args(args)
+    
+    server = Server(config)
     
     # Use SSL if certificates provided
-    if args.ssl_cert and args.ssl_key:
+    if config.ssl_cert and config.ssl_key:
         uvicorn.run(
             server.app, 
-            host=args.host, 
-            port=args.port,
-            ssl_certfile=args.ssl_cert,
-            ssl_keyfile=args.ssl_key
+            host=config.host, 
+            port=config.port,
+            ssl_certfile=config.ssl_cert,
+            ssl_keyfile=config.ssl_key
         )
     else:
-        uvicorn.run(server.app, host=args.host, port=args.port)
+        uvicorn.run(server.app, host=config.host, port=config.port)
 
 if __name__ == "__main__":
     main()

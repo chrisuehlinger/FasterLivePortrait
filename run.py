@@ -35,6 +35,7 @@ import pickle
 import collections
 import logging
 import threading
+from typing import Dict, List, Any, Deque, Optional, Tuple, Union
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from colorama import Fore, Back, Style
@@ -52,8 +53,8 @@ else:
 
 # Performance metrics tracking
 class PerformanceTracker:
-    def __init__(self):
-        self.metrics = {
+    def __init__(self) -> None:
+        self.metrics: Dict[str, Deque[float]] = {
             "decode_time": collections.deque(maxlen=30),
             "process_time": collections.deque(maxlen=30),
             "encode_time": collections.deque(maxlen=30),
@@ -61,18 +62,18 @@ class PerformanceTracker:
             "total_time": collections.deque(maxlen=30),
             "frame_sizes": collections.deque(maxlen=30),
         }
-        self.frames_received = 0
-        self.frames_processed = 0
-        self.last_metrics_log = time.time()
-        self.metrics_log_interval = 5.0  # Log metrics every 5 seconds
+        self.frames_received: int = 0
+        self.frames_processed: int = 0
+        self.last_metrics_log: float = time.time()
+        self.metrics_log_interval: float = 5.0  # Log metrics every 5 seconds
 
-    def update_metric(self, metric_name, value):
+    def update_metric(self, metric_name: str, value: float) -> None:
         """Update a performance metric"""
         self.metrics[metric_name].append(value)
         
-    def calculate_avg_metrics(self):
+    def calculate_avg_metrics(self) -> Dict[str, float]:
         """Calculate average metrics for logging"""
-        avg_metrics = {}
+        avg_metrics: Dict[str, float] = {}
         for key, values in self.metrics.items():
             if values:
                 avg_metrics[key] = sum(values) / len(values)
@@ -80,15 +81,15 @@ class PerformanceTracker:
                 avg_metrics[key] = 0
         return avg_metrics
     
-    def log_metrics(self):
+    def log_metrics(self) -> None:
         """Log performance metrics if interval has passed"""
-        current_time = time.time()
+        current_time: float = time.time()
         if current_time - self.last_metrics_log >= self.metrics_log_interval:
             self.last_metrics_log = current_time
-            avg_metrics = self.calculate_avg_metrics()
+            avg_metrics: Dict[str, float] = self.calculate_avg_metrics()
             
             # Calculate average FPS based on processing time
-            avg_fps = 1000 / avg_metrics["total_time"] if avg_metrics["total_time"] > 0 else 0
+            avg_fps: float = 1000 / avg_metrics["total_time"] if avg_metrics["total_time"] > 0 else 0
             
             # Log detailed performance info
             logger.info(f"=== Performance metrics ===")

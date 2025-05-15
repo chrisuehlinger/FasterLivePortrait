@@ -4,6 +4,7 @@
 # @Project : FasterLivePortrait
 # @FileName: gradio_live_portrait_pipeline.py
 import pdb
+from typing import Dict, List, Optional, Any, Union, Tuple, Set, Deque, Callable, TypeVar, cast
 
 import gradio as gr
 import cv2

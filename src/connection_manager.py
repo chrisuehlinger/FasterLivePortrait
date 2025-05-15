@@ -2,7 +2,8 @@ import asyncio
 import cv2
 import numpy as np
 import time
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Any, Optional, Union, Tuple, Protocol, runtime_checkable
+from typing_extensions import TypedDict
 import logging
 import json
 
@@ -12,19 +13,56 @@ logger = logging.getLogger("connection_manager")
 from fastapi import WebSocket
 from .proxy_connection import ProxyConnection
 
+# Define TypedDict classes for message structures
+class SourceSwitchedMessage(TypedDict):
+    """Message sent when a source has been switched"""
+    status: str  # "source_switched"
+    current_source: int  # Source index
+    source_name: str  # Name of the source image
+
+class IntensityUpdateMessage(TypedDict):
+    """Message sent with animation intensity updates"""
+    status: str  # "intensity_update"
+    value: float  # Intensity value (0.0 to 1.0)
+
+# Define TypedDict for performance metrics
+class PerformanceMetrics(TypedDict):
+    """Performance metrics for tracking processing times"""
+    receive_time: List[float]
+    decode_time: List[float]
+    process_time: List[float]
+    encode_time: List[float]
+    send_time: List[float]
+    total_time: List[float]
+    queue_time: List[float]
+    frames_received: Dict[str, int]
+    frames_processed: Dict[str, int]
+    avg_metrics: Dict[str, float]
+
+# Define Protocol for frame processors
+@runtime_checkable
+class FrameProcessor(Protocol):
+    """Protocol for frame processors that handle video frames"""
+    current_source_index: int
+    src_image_paths: List[str]
+    
+    def process_frame(self, frame: np.ndarray) -> Optional[np.ndarray]:
+        """Process a video frame and return the modified frame"""
+        ...
+
 class ConnectionManager:
-    def __init__(self):
+    def __init__(self) -> None:
         self.actor_connections: Dict[str, WebSocket] = {}
-        self.director_connections: Dict[str, WebSocket] = {}
+        self.director_connections: Dict[str, List[WebSocket]] = {}
         self.viewer_connections: Dict[str, List[WebSocket]] = {}
-        self.frame_queues: Dict[str, asyncio.Queue] = {}
+        self.frame_queues: Dict[str, asyncio.Queue[np.ndarray]] = {}
         self.processed_frames: Dict[str, np.ndarray] = {}
-        self.frame_processors: Dict[str, object] = {}
+        self.frame_processors: Dict[str, FrameProcessor] = {}
         self.is_processing: Dict[str, bool] = {}
         self.frames_received: Dict[str, int] = {}
         self.frames_processed: Dict[str, int] = {}
         self.processing_tasks: Dict[str, asyncio.Task] = {}
-        self.performance_metrics = {
+        self.performance_metrics: PerformanceMetrics = {
             "receive_time": [],
             "decode_time": [],
             "process_time": [],
@@ -36,8 +74,8 @@ class ConnectionManager:
             "frames_processed": {},
             "avg_metrics": {}
         }
-        self.last_metrics_log = time.time()
-        self.metrics_log_interval = 5.0  # Log metrics every 5 seconds
+        self.last_metrics_log: float = time.time()
+        self.metrics_log_interval: float = 5.0  # Log metrics every 5 seconds
         
         # New attributes for proxying
         self.proxy_connections: Dict[str, ProxyConnection] = {}  # session_id -> ProxyConnection
@@ -47,7 +85,7 @@ class ConnectionManager:
         # New attribute to store the latest intensity value for each session
         self.animation_intensity: Dict[str, float] = {}
     
-    async def connect_actor(self, session_id: str, websocket: WebSocket):
+    async def connect_actor(self, session_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
         self.actor_connections[session_id] = websocket
         self.frame_queues[session_id] = asyncio.Queue(maxsize=1)  # Only store 1 frame
@@ -61,7 +99,7 @@ class ConnectionManager:
             self._process_frames_loop(session_id)
         )
         
-    async def connect_viewer(self, session_id: str, websocket: WebSocket):
+    async def connect_viewer(self, session_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
         
         # Initialize list for this session if it doesn't exist
@@ -72,7 +110,7 @@ class ConnectionManager:
         self.viewer_connections[session_id].append(websocket)
         logger.info(f"Viewer connected to session: {session_id}, total viewers: {len(self.viewer_connections[session_id])}")
         
-    async def connect_director(self, session_id: str, websocket: WebSocket):
+    async def connect_director(self, session_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
         
         # Initialize list for this session if it doesn't exist
@@ -83,7 +121,7 @@ class ConnectionManager:
         self.director_connections[session_id].append(websocket)
         logger.info(f"Director connected to session: {session_id}, total directors: {len(self.director_connections[session_id])}")
         
-    def disconnect_actor(self, session_id: str):
+    def disconnect_actor(self, session_id: str) -> None:
         if session_id in self.actor_connections:
             del self.actor_connections[session_id]
             logger.info(f"Actor disconnected: {session_id}")
@@ -122,7 +160,7 @@ class ConnectionManager:
             if session_id in self.current_proxy_active:
                 del self.current_proxy_active[session_id]
             
-    def disconnect_director(self, session_id: str, websocket: WebSocket):
+    def disconnect_director(self, session_id: str, websocket: WebSocket) -> None:
         if session_id in self.director_connections:
             try:
                 self.director_connections[session_id].remove(websocket)
@@ -136,7 +174,7 @@ class ConnectionManager:
                 # WebSocket was not in the list
                 pass
             
-    def disconnect_viewer(self, session_id: str, websocket: WebSocket):
+    def disconnect_viewer(self, session_id: str, websocket: WebSocket) -> None:
         if session_id in self.viewer_connections:
             try:
                 self.viewer_connections[session_id].remove(websocket)
@@ -150,7 +188,7 @@ class ConnectionManager:
                 # WebSocket was not in the list
                 pass
     
-    def set_proxy_sources(self, session_id: str, proxy_sources: List[int], proxy_target: str):
+    def set_proxy_sources(self, session_id: str, proxy_sources: List[int], proxy_target: str) -> None:
         """Configure which sources should be proxied for a session"""
         self.proxy_sources[session_id] = set(proxy_sources)
         
@@ -164,10 +202,10 @@ class ConnectionManager:
         """Check if the current source should be proxied"""
         return session_id in self.proxy_sources and source_index in self.proxy_sources[session_id]
         
-    async def handle_proxy_switch(self, session_id: str, from_index: int, to_index: int):
+    async def handle_proxy_switch(self, session_id: str, from_index: int, to_index: int) -> None:
         """Handle switching between local and proxied sources"""
-        was_proxied = self.is_source_proxied(session_id, from_index)
-        will_be_proxied = self.is_source_proxied(session_id, to_index)
+        was_proxied: bool = self.is_source_proxied(session_id, from_index)
+        will_be_proxied: bool = self.is_source_proxied(session_id, to_index)
         
         # No change in proxy status
         if was_proxied == will_be_proxied:
@@ -183,10 +221,10 @@ class ConnectionManager:
             # Switching from a proxied source to a local one
             logger.info(f"Switching from proxied source {from_index} to local source {to_index}")
             if session_id in self.proxy_connections:
-                self.proxy_connections[session_id].disconnect()
+                await self.proxy_connections[session_id].disconnect()
             self.current_proxy_active[session_id] = False
     
-    async def receive_frame(self, session_id: str, frame: np.ndarray):
+    async def receive_frame(self, session_id: str, frame: np.ndarray) -> bool:
         """Handle a new frame from an actor"""
         if session_id not in self.frame_queues:
             return False
@@ -211,7 +249,7 @@ class ConnectionManager:
             logger.error(f"Error adding frame to queue for session {session_id}: {e}")
             return False
     
-    async def _process_frames_loop(self, session_id: str):
+    async def _process_frames_loop(self, session_id: str) -> None:
         """Background task to process frames for a session"""
         try:
             while session_id in self.actor_connections:
@@ -224,17 +262,17 @@ class ConnectionManager:
                 
                 try:
                     # Start timing for queue wait
-                    queue_start_time = time.time()
+                    queue_start_time: float = time.time()
                     
                     # Get the next frame from the queue (will wait if queue is empty)
-                    frame = await queue.get()
+                    frame: np.ndarray = await queue.get()
                     
                     # Measure queue wait time
-                    queue_time = time.time() - queue_start_time
+                    queue_time: float = time.time() - queue_start_time
                     self._update_metric("queue_time", queue_time * 1000)  # Convert to ms
                     
                     # Start timing the entire processing pipeline
-                    total_start_time = time.time()
+                    total_start_time: float = time.time()
                     
                     # Get the processor from the server
                     processor = self.frame_processors.get(session_id)
@@ -243,63 +281,63 @@ class ConnectionManager:
                         continue
                     
                     # Check if we're using a proxy for the current source
-                    current_source_index = processor.current_source_index
-                    use_proxy = (session_id in self.proxy_sources and 
+                    current_source_index: int = processor.current_source_index
+                    use_proxy: bool = (session_id in self.proxy_sources and 
                                 current_source_index in self.proxy_sources[session_id] and
                                 session_id in self.proxy_connections)
                     
                     if use_proxy:
                         # PROXY MODE: Send frame to remote server and wait for result
-                        proxy_start_time = time.time()
-                        proxy = self.proxy_connections[session_id]
+                        proxy_start_time: float = time.time()
+                        proxy: ProxyConnection = self.proxy_connections[session_id]
                         
                         # Make sure we're connected
                         if not proxy.connected:
-                            success = await proxy.connect()
+                            success: bool = await proxy.connect()
                             if not success:
                                 logger.error(f"Failed to connect to proxy for source {current_source_index}; falling back to local processing")
                                 use_proxy = False
                         
                         if use_proxy:  # Still using proxy after connection check
                             # Encode the frame to JPEG for sending
-                            encode_start_time = time.time()
+                            proxy_encode_start_time: float = time.time()
                             success, encoded_img = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
                             if not success:
                                 logger.error("Failed to encode frame for proxy")
                                 continue
-                            encode_time = time.time() - encode_start_time
-                            self._update_metric("encode_time", encode_time * 1000)
+                            proxy_encode_time: float = time.time() - proxy_encode_start_time
+                            self._update_metric("encode_time", proxy_encode_time * 1000)
                             
                             # Send to remote server
-                            send_to_proxy_start_time = time.time()
-                            sent = await proxy.send_frame(encoded_img.tobytes())
+                            send_to_proxy_start_time: float = time.time()
+                            sent: bool = await proxy.send_frame(encoded_img.tobytes())
                             if not sent:
                                 logger.error("Failed to send frame to proxy")
                                 continue
-                            send_to_proxy_time = time.time() - send_to_proxy_start_time
+                            send_to_proxy_time: float = time.time() - send_to_proxy_start_time
                             
                             # Wait for processed result
-                            proxy_wait_start_time = time.time()
-                            binary_img = await proxy.get_processed_frame()
-                            proxy_wait_time = time.time() - proxy_wait_start_time
+                            proxy_wait_start_time: float = time.time()
+                            proxy_binary_img: Optional[bytes] = await proxy.get_processed_frame()
+                            proxy_wait_time: float = time.time() - proxy_wait_start_time
                             
-                            if binary_img is None:
+                            if proxy_binary_img is None:
                                 logger.error("Failed to get processed frame from proxy")
                                 continue
                             
                             # Record total proxy time
-                            proxy_time = time.time() - proxy_start_time
+                            proxy_time: float = time.time() - proxy_start_time
                             self._update_metric("process_time", proxy_time * 1000)
                             
                             # Send to viewers
-                            send_start_time = time.time()
-                            await self._send_bytes_to_viewers(binary_img, session_id)
-                            send_time = time.time() - send_start_time
-                            self._update_metric("send_time", send_time * 1000)
+                            proxy_send_start_time: float = time.time()
+                            await self._send_bytes_to_viewers(proxy_binary_img, session_id)
+                            proxy_send_time: float = time.time() - proxy_send_start_time
+                            self._update_metric("send_time", proxy_send_time * 1000)
                             
                             # Total time
-                            total_time = time.time() - total_start_time
-                            self._update_metric("total_time", total_time * 1000)
+                            proxy_total_time: float = time.time() - total_start_time
+                            self._update_metric("total_time", proxy_total_time * 1000)
                             
                             # Update stats
                             self.frames_processed[session_id] += 1
@@ -307,9 +345,9 @@ class ConnectionManager:
                     if not use_proxy:
                         # LOCAL MODE: Process the frame locally as before
                         self.is_processing[session_id] = True
-                        process_start_time = time.time()
-                        processed_frame = processor.process_frame(frame)
-                        process_time = time.time() - process_start_time
+                        process_start_time: float = time.time()
+                        processed_frame: Optional[np.ndarray] = processor.process_frame(frame)
+                        process_time: float = time.time() - process_start_time
                         self._update_metric("process_time", process_time * 1000)  # Convert to ms
                         
                         if processed_frame is not None:
@@ -317,35 +355,35 @@ class ConnectionManager:
                             self.processed_frames[session_id] = processed_frame
                             
                             # Encode the frame to JPEG
-                            encode_start_time = time.time()
+                            local_encode_start_time: float = time.time()
                             success, encoded_img = cv2.imencode('.jpg', processed_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
                             if not success:
                                 continue
-                            binary_img = encoded_img.tobytes()
-                            encode_time = time.time() - encode_start_time
-                            self._update_metric("encode_time", encode_time * 1000)  # Convert to ms
+                            local_binary_img: bytes = encoded_img.tobytes()
+                            local_encode_time: float = time.time() - local_encode_start_time
+                            self._update_metric("encode_time", local_encode_time * 1000)  # Convert to ms
                             
                             # Send to viewers
-                            send_start_time = time.time()
-                            await self._send_bytes_to_viewers(binary_img, session_id)
-                            send_time = time.time() - send_start_time
-                            self._update_metric("send_time", send_time * 1000)  # Convert to ms
+                            local_send_start_time: float = time.time()
+                            await self._send_bytes_to_viewers(local_binary_img, session_id)
+                            local_send_time: float = time.time() - local_send_start_time
+                            self._update_metric("send_time", local_send_time * 1000)  # Convert to ms
                             
                             # Total time
-                            total_time = time.time() - total_start_time
-                            self._update_metric("total_time", total_time * 1000)  # Convert to ms
+                            local_total_time: float = time.time() - total_start_time
+                            self._update_metric("total_time", local_total_time * 1000)  # Convert to ms
                             
                             # Update stats
                             self.frames_processed[session_id] += 1
                             
                             # Log performance metrics periodically
-                            current_time = time.time()
+                            current_time: float = time.time()
                             if current_time - self.last_metrics_log >= self.metrics_log_interval:
                                 self.last_metrics_log = current_time
-                                avg_metrics = self._calculate_avg_metrics()
+                                avg_metrics: Dict[str, float] = self._calculate_avg_metrics()
                                 
                                 # Calculate average FPS based on processing time
-                                avg_fps = 1000 / avg_metrics["total_time"] if avg_metrics["total_time"] > 0 else 0
+                                avg_fps: float = 1000 / avg_metrics["total_time"] if avg_metrics["total_time"] > 0 else 0
                                 
                                 # Log detailed performance info
                                 logger.info(f"Performance metrics - Session {session_id}:")
@@ -356,8 +394,8 @@ class ConnectionManager:
                                 logger.info(f"  Total Time: {avg_metrics['total_time']:.2f}ms (Theoretical max FPS: {avg_fps:.1f})")
                                 
                                 # Log frame counts
-                                dropped = self.frames_received[session_id] - self.frames_processed[session_id]
-                                drop_rate = dropped / self.frames_received[session_id] if self.frames_received[session_id] > 0 else 0
+                                dropped: int = self.frames_received[session_id] - self.frames_processed[session_id]
+                                drop_rate: float = dropped / self.frames_received[session_id] if self.frames_received[session_id] > 0 else 0
                                 logger.info(f"  Frames: Received {self.frames_received[session_id]}, Processed {self.frames_processed[session_id]}")
                                 logger.info(f"  Dropped: {dropped} frames ({drop_rate:.1%})")
                     
@@ -375,7 +413,7 @@ class ConnectionManager:
         except Exception as e:
             logger.error(f"Error in process_frames_loop for session {session_id}: {e}")
             
-    async def _send_bytes_to_viewers(self, binary_data: bytes, session_id: str):
+    async def _send_bytes_to_viewers(self, binary_data: bytes, session_id: str) -> None:
         """Send binary data to all connected viewers for a specific session"""
         if session_id not in self.viewer_connections or not self.viewer_connections[session_id]:
             # Even if there are no viewers, still send back to the actor for preview
@@ -387,7 +425,7 @@ class ConnectionManager:
             return
             
         # Send to all viewers of this session
-        disconnected_viewers = []
+        disconnected_viewers: List[WebSocket] = []
         for i, viewer_websocket in enumerate(self.viewer_connections[session_id]):
             try:
                 await viewer_websocket.send_bytes(binary_data)
@@ -407,20 +445,20 @@ class ConnectionManager:
                 logger.error(f"Error sending preview to actor in session {session_id}: {e}")
 
     # New method to send notifications to viewers when source is switched
-    async def notify_viewers_source_switched(self, session_id: str, source_index: int, source_name: str):
+    async def notify_viewers_source_switched(self, session_id: str, source_index: int, source_name: str) -> None:
         """Notify all viewers that the source image has been switched"""
         logger.info(f"Notifying viewers of source switch in session {session_id}: {source_index} - {source_name}")
         if session_id not in self.viewer_connections:
             logger.warning(f"No viewers connected for session {session_id}")
             return
             
-        message = {
+        message: SourceSwitchedMessage = {
             "status": "source_switched", 
             "current_source": source_index,
             "source_name": source_name
         }
         
-        disconnected_viewers = []
+        disconnected_viewers: List[WebSocket] = []
         for viewer_websocket in self.viewer_connections[session_id]:
             try:
                 logger.info(f"Sending source switch notification to viewer in session {session_id}: {message}")
@@ -434,34 +472,27 @@ class ConnectionManager:
             self.viewer_connections[session_id].remove(websocket)
 
     # New method to send notifications to viewers when source is switched
-    async def notify_actors_source_switched(self, session_id: str, source_index: int, source_name: str):
+    async def notify_actors_source_switched(self, session_id: str, source_index: int, source_name: str) -> None:
         """Notify all actors that the source image has been switched"""
         logger.info(f"Notifying actors of source switch in session {session_id}: {source_index} - {source_name}")
         if session_id not in self.actor_connections:
             return
             
-        message = {
+        message: SourceSwitchedMessage = {
             "status": "source_switched", 
             "current_source": source_index,
             "source_name": source_name
         }
         
-        disconnected_actors = []
-        for actor_websocket in self.actor_connections[session_id]:
-            try:
-                await actor_websocket.send_json(message)
-            except Exception as e:
-                logger.error(f"Error sending source switch notification to actor in session {session_id}: {e}")
-                disconnected_actors.append(actor_websocket)
-                
-        # Remove any disconnected actors
-        for websocket in disconnected_actors:
-            self.actor_connections[session_id].remove(websocket)
+        try:
+            await self.actor_connections[session_id].send_json(message)
+        except Exception as e:
+            logger.error(f"Error sending source switch notification to actor in session {session_id}: {e}")
 
-    async def broadcast_message(self, session_id: str, message: dict, exclude_websocket=None):
+    async def broadcast_message(self, session_id: str, message: Union[SourceSwitchedMessage, IntensityUpdateMessage], exclude_websocket: Optional[WebSocket] = None) -> None:
         """Broadcast a message to all connected clients for a session"""
         try:
-            message_json = json.dumps(message)
+            message_json: str = json.dumps(message)
             
             # Send to all viewers
             if session_id in self.viewer_connections:
@@ -492,14 +523,14 @@ class ConnectionManager:
         except Exception as e:
             logger.error(f"Error broadcasting message for session {session_id}: {e}")
     
-    async def handle_intensity_update(self, session_id: str, intensity: float, websocket: WebSocket):
+    async def handle_intensity_update(self, session_id: str, intensity: float, websocket: WebSocket) -> None:
         """Handle an intensity update from any client and broadcast to all others"""
         try:
             # Store the latest intensity value
             self.animation_intensity[session_id] = float(intensity)
             
             # Create the message to broadcast
-            message = {
+            message: IntensityUpdateMessage = {
                 "status": "intensity_update",
                 "value": intensity
             }
@@ -512,15 +543,15 @@ class ConnectionManager:
         except Exception as e:
             logger.error(f"Error handling intensity update for session {session_id}: {e}")
 
-    def _update_metric(self, metric_name, value):
+    def _update_metric(self, metric_name: str, value: float) -> None:
         """Update a performance metric, maintaining a rolling average"""
         if len(self.performance_metrics[metric_name]) >= 30:  # Keep last 30 values
             self.performance_metrics[metric_name].pop(0)
         self.performance_metrics[metric_name].append(value)
         
-    def _calculate_avg_metrics(self):
+    def _calculate_avg_metrics(self) -> Dict[str, float]:
         """Calculate average metrics for logging"""
-        metrics = {}
+        metrics: Dict[str, float] = {}
         for key in ["receive_time", "decode_time", "process_time", "encode_time", "send_time", "total_time", "queue_time"]:
             values = self.performance_metrics[key]
             if values:

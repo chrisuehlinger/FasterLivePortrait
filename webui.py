@@ -5,6 +5,7 @@ The entrance of the gradio
 """
 import os
 import pdb
+from typing import Dict, List, Any, Tuple, Optional, Union
 
 import gradio as gr
 import os.path as osp
@@ -13,7 +14,7 @@ from omegaconf import OmegaConf
 from src.pipelines.gradio_live_portrait_pipeline import GradioLivePortraitPipeline
 
 
-def load_description(fp):
+def load_description(fp: str) -> str:
     with open(fp, 'r', encoding='utf-8') as f:
         content = f.read()
     return content
@@ -31,31 +32,31 @@ parser.add_argument("--port", type=int, default=9870, help="server port")
 args, unknown = parser.parse_known_args()
 
 if args.mode == "onnx":
-    cfg_path = "configs/onnx_mp_infer.yaml" if args.use_mp else "configs/onnx_infer.yaml"
+    config_path: str = "configs/onnx_mp_infer.yaml" if args.use_mp else "configs/onnx_infer.yaml"
 else:
-    cfg_path = "configs/trt_mp_infer.yaml" if args.use_mp else "configs/trt_infer.yaml"
-infer_cfg = OmegaConf.load(cfg_path)
+    config_path: str = "configs/trt_mp_infer.yaml" if args.use_mp else "configs/trt_infer.yaml"
+infer_cfg = OmegaConf.load(config_path)
 gradio_pipeline = GradioLivePortraitPipeline(infer_cfg)
 
 
-def gpu_wrapped_execute_video(*args, **kwargs):
+def gpu_wrapped_execute_video(*args: Any, **kwargs: Any) -> Any:
     return gradio_pipeline.execute_video(*args, **kwargs)
 
 
-def gpu_wrapped_execute_image(*args, **kwargs):
+def gpu_wrapped_execute_image(*args: Any, **kwargs: Any) -> Any:
     return gradio_pipeline.execute_image(*args, **kwargs)
 
 
-def change_animal_model(is_animal):
+def change_animal_model(is_animal: bool) -> None:
     global gradio_pipeline
     gradio_pipeline.clean_models()
     gradio_pipeline.init_models(is_animal=is_animal)
 
 
 # assets
-title_md = "assets/gradio/gradio_title.md"
-example_portrait_dir = "assets/examples/source"
-example_video_dir = "assets/examples/driving"
+title_md: str = "assets/gradio/gradio_title.md"
+example_portrait_dir: str = "assets/examples/source"
+example_video_dir: str = "assets/examples/driving"
 #################### interface logic ####################
 
 # Define components first
@@ -65,7 +66,7 @@ retargeting_input_image = gr.Image(type="filepath")
 output_image = gr.Image(format="png", type="numpy")
 output_image_paste_back = gr.Image(format="png", type="numpy")
 
-js_func = """
+js_func: str = """
     function refresh() {
         const url = new URL(window.location);
 
@@ -193,8 +194,8 @@ with gr.Blocks(theme=gr.themes.Soft(font=[gr.themes.GoogleFont("Plus Jakarta San
                     with gr.Accordion(open=True, label="Driving Text"):
                         driving_text_input = gr.Textbox(value="Hi, I am created by Faster LivePortrait!",
                                                         label="Driving Text")
-                        voice_dir = "checkpoints/Kokoro-82M/voices/"
-                        voice_names = [os.path.splitext(vname)[0] for vname in os.listdir(voice_dir) if vname.endswith(".pt")]
+                        voice_dir: str = "checkpoints/Kokoro-82M/voices/"
+                        voice_names: List[str] = [os.path.splitext(vname)[0] for vname in os.listdir(voice_dir) if vname.endswith(".pt")]
                         voice_name = gr.Dropdown(
                             choices=voice_names, value='af_heart', label="Voice Name")
 
