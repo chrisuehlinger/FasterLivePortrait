@@ -220,12 +220,57 @@ class FaceDetector:
                         'landmark': landmark
                     })
                 
+                return results
+                
             elif self.model_type == "opencv":
                 # Detect faces using OpenCV
                 # Convert to grayscale for detection
                 gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
                 
                 # Detect faces
+                opencv_faces = self.opencv_face_detector.detectMultiScale(
+                    gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+                
+                results = []
+                for (x, y, w, h) in opencv_faces:
+                    bbox = np.array([x, y, x+w, y+h])
+                    confidence = 1.0  # OpenCV detector doesn't provide confidence scores
+                    
+                    # Try to get landmarks if landmark detector is available
+                    landmark = None
+                    if self.opencv_landmark_detector is not None:
+                        success, landmarks = self.opencv_landmark_detector.fit(
+                            gray, np.array([bbox.reshape(2, 2)]))
+                        if success:
+                            landmark = landmarks[0][0]
+                    
+                    results.append({
+                        'bbox': bbox,
+                        'confidence': confidence,
+                        'landmark': landmark
+                    })
+                
+                return results
+                
+            else:
+                logger.error(f"Unknown model type: {self.model_type}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error during face detection: {e}")
+            return []
+    
+    def get_largest_face(self, image: np.ndarray) -> Optional[Dict[str, Any]]:
+        """
+        Get the largest face in an image.
+        
+        Args:
+            image: Input image in BGR format
+            
+        Returns:
+            Dictionary with face detection results or None if no face detected
+        """
+        faces = self.detect(image)
         
         if not faces:
             return None
