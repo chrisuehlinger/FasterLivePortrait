@@ -217,7 +217,9 @@
         </div>
     </div>
 
-    <script>
+    <script type="module">
+        import { setupWebSocketHandler, sendIntensityUpdate } from './js/websocket-handler.js';
+        
         // Configuration
         const SERVER_URL = window.location.hostname + ":" + window.location.port;
         const USE_SSL = window.location.protocol === 'https:';
@@ -398,9 +400,50 @@
                 sessionIdInput.value = sessionId;
                 
                 // Now connect via WebSocket
-                websocket = new WebSocket(`${WS_URL}/ws/actor/${sessionId}`);
+                const ws = new WebSocket(`${WS_URL}/ws/actor/${sessionId}`);
                 
-                websocket.onopen = () => {
+                // Make functions available in global scope for event handlers
+                window.disconnect = disconnect;
+                window.switchSource = switchSource;
+                window.handleKeyPress = handleKeyPress;
+                
+                // Setup the websocket handler with custom handlers
+                websocket = setupWebSocketHandler(ws, {
+                    onBinaryData: (data) => {
+                        handlePreviewFrame(data);
+                        // Count bytes for binary data
+                        if (data instanceof ArrayBuffer) {
+                            bytesReceived += data.byteLength;
+                        } else if (data instanceof Blob) {
+                            bytesReceived += data.size;
+                        }
+                    },
+                    onSourceSwitched: (data) => {
+                        console.log('Source switched event:', data);
+                        updateSourceUI(data.sourceIndex);
+                    },
+                    onConnectionStatus: (data) => {
+                        if (data.action === 'connected' || data.status === 'connected') {
+                            // Connection confirmed
+                            connectionStatus.textContent = `Connected to server with session ID: ${data.session_id}`;
+                            
+                            // Check if server supports multiple sources
+                            if (data.has_multiple_sources) {
+                                hasMultipleSources = true;
+                                sourcesAvailable = data.sources || [];
+                                currentSourceIndex = data.current_source || 0;
+                                
+                                console.log(`Server supports ${sourcesAvailable.length} source images:`, sourcesAvailable);
+                                
+                                // Setup source switching UI
+                                setupSourceSwitching(sourcesAvailable);
+                            }
+                        }
+                    }
+                });
+                
+                // Set up event listeners for websocket events
+                document.addEventListener('websocket:open', () => {
                     loading.style.display = 'none';
                     connectionStatus.textContent = 'Connected to server! Starting video stream...';
                     connectionStatus.className = 'status success';
@@ -423,14 +466,14 @@
                         <a href="${viewerUrl}" target="_blank">${viewerUrl}</a>
                     `;
                     viewerLink.style.display = 'block';
-                };
+                });
                 
-                websocket.onclose = (event) => {
+                document.addEventListener('websocket:close', (e) => {
                     loading.style.display = 'none';
                     stopFrameCapture();
                     
-                    if (event.wasClean) {
-                        connectionStatus.textContent = `Disconnected: ${event.reason || 'Connection closed'}`;
+                    if (e.detail.wasClean) {
+                        connectionStatus.textContent = `Disconnected: ${e.detail.reason || 'Connection closed'}`;
                     } else {
                         connectionStatus.textContent = 'Connection lost. Server may be down.';
                     }
@@ -440,61 +483,27 @@
                     connectButton.disabled = false;
                     sessionIdInput.disabled = false;
                     viewerLink.style.display = 'none';
-                };
+                });
                 
-                websocket.onerror = (error) => {
+                document.addEventListener('websocket:error', (e) => {
                     loading.style.display = 'none';
-                    connectionStatus.textContent = `Connection error: ${error.message || 'Unknown error'}`;
+                    connectionStatus.textContent = `Connection error: ${e.detail.error?.message || 'Unknown error'}`;
                     connectionStatus.className = 'status error';
-                };
+                });
                 
-                websocket.onmessage = (event) => {
-                    // Handle text messages from server
-                    if (typeof event.data === 'string') {
-                        try {
-                            const message = JSON.parse(event.data);
-                            console.log('Server message:', message);
-                            
-                            if (message.status === 'connected') {
-                                // Connection confirmed
-                                connectionStatus.textContent = `Connected to server with session ID: ${message.session_id}`;
-                                
-                                // Check if server supports multiple sources
-                                if (message.has_multiple_sources) {
-                                    hasMultipleSources = true;
-                                    sourcesAvailable = message.sources || [];
-                                    currentSourceIndex = message.current_source || 0;
-                                    
-                                    console.log(`Server supports ${sourcesAvailable.length} source images:`, sourcesAvailable);
-                                    
-                                    // Setup source switching UI
-                                    setupSourceSwitching(sourcesAvailable);
-                                }
-                            }
-                            
-                            // Handle source switching confirmation
-                            if (message.status === 'source_switched') {
-                                console.log(`Server confirmed switch to source ${message.current_source + 1}: ${message.source_name}`);
-                                updateSourceUI(message.current_source);
-                            }
-                        } catch (e) {
-                            console.log('Received invalid JSON');
-                        }
+                document.addEventListener('websocket:message', (e) => {
+                    // Count bytes received for stats for string data
+                    const data = e.detail.data;
+                    if (typeof data === 'string') {
+                        bytesReceived += data.length;
                     }
-                    // Handle binary data (processed frames)
-                    else if (event.data instanceof Blob) {
-                        handlePreviewFrame(event.data);
-                    }
-                    
-                    // Count bytes received for stats
-                    if (typeof event.data === 'string') {
-                        bytesReceived += event.data.length;
-                    } else if (event.data instanceof ArrayBuffer) {
-                        bytesReceived += event.data.byteLength;
-                    } else if (event.data instanceof Blob) {
-                        bytesReceived += event.data.size;
-                    }
-                };
+                });
+                
+                document.addEventListener('websocket:source_switched', (e) => {
+                    console.log(`Server confirmed switch to source ${e.detail.sourceIndex + 1}: ${e.detail.sourceName}`);
+                    // Use sourceIndex for UI updates
+                    updateSourceUI(e.detail.sourceIndex);
+                });
                 
             } catch (error) {
                 loading.style.display = 'none';

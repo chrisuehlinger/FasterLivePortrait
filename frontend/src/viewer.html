@@ -73,6 +73,12 @@
     
     <div id="connectionStatus">Waiting for connection...</div>
     
+    <script type="module">
+        import { setupWebSocketHandler, getAnimationIntensity } from './js/websocket-handler.js';
+        // Make these available to main.js
+        window.setupWebSocketHandler = setupWebSocketHandler;
+        window.getAnimationIntensity = getAnimationIntensity;
+    </script>
     <script type="module" src="./main.js"></script>
 </body>
 </html>

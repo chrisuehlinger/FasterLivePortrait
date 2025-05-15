@@ -1,8 +1,10 @@
+// Import Three.js
 import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+// websocket-handler.js is imported in viewer.html and exposed via window
 
 // Configuration
 const SERVER_URL = window.location.hostname + ":" + window.location.port;
@@ -776,114 +778,103 @@ function connectToWebSocket() {
         return;
     }
     
-    websocket = new WebSocket(`${WS_URL}/ws/viewer/${sessionId}`);
+    const ws = new WebSocket(`${WS_URL}/ws/viewer/${sessionId}`);
     
-    websocket.onopen = () => {
+    // Use the websocket handler to manage the connection
+    websocket = window.setupWebSocketHandler(ws, {
+        onBinaryData: async (data) => {
+            try {
+                // Handle binary data (frames)
+                const blob = data;
+                
+                // Create an image from the blob
+                const imageBitmap = await createImageBitmap(blob);
+                
+                // Update the texture with new frame
+                if (videoTexture.image !== imageBitmap) {
+                    // Clean up previous texture if it exists
+                    if (videoTexture.image) {
+                        videoTexture.dispose();
+                    }
+                    
+                    // Create new texture with the received frame
+                    videoTexture.image = imageBitmap;
+                    videoTexture.needsUpdate = true;
+                    
+                    // Update the shader uniform
+                    videoMaterial.uniforms.videoTexture.value = videoTexture;
+                    
+                    // Update texture aspect ratio
+                    updateTextureAspectRatio();
+                }
+                
+                // Hide connection UI if it's still visible
+                if (sessionInputDiv.style.display !== 'none') {
+                    sessionInputDiv.style.display = 'none';
+                }
+                
+                // Update FPS counter
+                frameCount++;
+                const now = performance.now();
+                const elapsed = now - lastFrameTime;
+                
+                if (elapsed >= 1000) { // Update FPS every second
+                    fps = Math.round((frameCount * 1000) / elapsed);
+                    frameCount = 0;
+                    lastFrameTime = now;
+                    
+                    // Update status with FPS
+                    showStatus(`FPS: ${fps}`, false, true);
+                }
+            } catch (error) {
+                console.error('Error processing video frame:', error);
+                showStatus('Error processing video frame', true);
+            }
+        },
+        onIntensityUpdate: (intensity) => {
+            animationIntensity = intensity;
+            console.log(`Animation intensity updated to: ${animationIntensity}`);
+            // Update any animations that use intensity
+        }
+    });
+    
+    // Set up explicit event listener for source switching
+    document.addEventListener('websocket:source_switched', (e) => {
+        const sourceIndex = e.detail.sourceIndex;
+        const sourceName = e.detail.sourceName;
+        console.log(`Source image switched to index ${sourceIndex}: ${sourceName}`);
+        showStatus(`Source changed to: ${sourceName}`, false);
+        
+        // Switch background to match the source
+        switchBackground(sourceIndex);
+    });
+    
+    // Set up event listeners for websocket events
+    document.addEventListener('websocket:open', () => {
         isConnected = true;
         showStatus('Connected to stream. Waiting for video...', false);
-        
-        // Send heartbeat every 30 seconds to keep connection alive
-        setInterval(() => {
-            if (websocket && websocket.readyState === WebSocket.OPEN) {
-                websocket.send('heartbeat');
-            }
-        }, 30000);
-    };
+    });
     
-    websocket.onclose = (event) => {
+    // Event listeners
+    document.addEventListener('websocket:close', (e) => {
         isConnected = false;
-        if (event.wasClean) {
-            showStatus(`Connection closed: ${event.reason}`, true);
+        if (e.detail.wasClean) {
+            showStatus(`Connection closed: ${e.detail.reason}`, true);
         } else {
             showStatus('Connection lost. Attempting to reconnect...', true);
             setTimeout(connectToWebSocket, 3000);
         }
-    };
-    
-    websocket.onerror = (error) => {
-        console.error('WebSocket error:', error);
+    });
+
+    document.addEventListener('websocket:error', (e) => {
+        console.error('WebSocket error:', e.detail.error);
         showStatus('Connection error. Please try again later.', true);
-    };
-    
-    websocket.onmessage = handleWebSocketMessage;
-}
+    });
 
-// Handle incoming WebSocket messages
-async function handleWebSocketMessage(event) {
-    if (typeof event.data === 'string') {
-        // Handle text messages (like status updates)
-        try {
-            const jsonData = JSON.parse(event.data);
-            console.log('Received JSON message:', jsonData);
-
-            switch (jsonData.status) {
-                case 'source_switched':
-                    const sourceIndex = jsonData.current_source;
-                    console.log(`Source image switched to index ${sourceIndex}: ${jsonData.source_name}`);
-                    showStatus(`Source changed to: ${jsonData.source_name}`, false);
-                    
-                    // Switch background to match the source
-                    switchBackground(sourceIndex);
-                    break;
-                case 'intensity_update':
-                    animationIntensity = jsonData.value;
-                    console.log(`Animation intensity updated to: ${animationIntensity}`);
-                    break;
-            }
-        } catch (e) {
-            // If it's not valid JSON, just log it
-            console.log('Received text message:', event.data);
-        }
-        return;
-    }
-    
-    try {
-        // Handle binary data (frames)
-        const blob = event.data;
-        
-        // Create an image from the blob
-        const imageBitmap = await createImageBitmap(blob);
-        
-        // Update the texture with new frame
-        if (videoTexture.image !== imageBitmap) {
-            // Clean up previous texture if it exists
-            if (videoTexture.image) {
-                videoTexture.dispose();
-            }
-            
-            // Create new texture with the received frame
-            videoTexture.image = imageBitmap;
-            videoTexture.needsUpdate = true;
-            
-            // Update the shader uniform
-            videoMaterial.uniforms.videoTexture.value = videoTexture;
-            
-            // Update texture aspect ratio
-            updateTextureAspectRatio();
-        }
-        
-        // Hide connection UI if it's still visible
-        if (sessionInputDiv.style.display !== 'none') {
-            sessionInputDiv.style.display = 'none';
-        }
-        
-        // Update FPS counter
-        frameCount++;
-        const now = performance.now();
-        const elapsed = now - lastFrameTime;
-        
-        if (elapsed >= 1000) { // Update FPS every second
-            fps = Math.round((frameCount * 1000) / elapsed);
-            frameCount = 0;
-            lastFrameTime = now;
-            
-            // Update status with FPS
-            showStatus(`FPS: ${fps}`, false, true);
-        }
-    } catch (error) {
-        console.error('Error processing video frame:', error);
-        showStatus('Error processing video frame', true);
-    }
+    // Add handler for generic messages
+    document.addEventListener('websocket:message', (e) => {
+        console.log('Received generic message:', e.detail);
+    });
 }
 
 // Show status message with optional fade

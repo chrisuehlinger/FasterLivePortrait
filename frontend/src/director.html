@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FasterLivePortrait - Actor Streaming</title>
+    <!-- Module imports are placed at end of body -->
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -99,7 +100,9 @@
     <button id="pauseButton" class="pause-button" onclick="togglePause()">PAUSE ANIMATION</button>
   </div>
 
-    <script>
+    <script type="module">
+        import { setupWebSocketHandler, sendIntensityUpdate as sendIntensityUpdateModule } from './js/websocket-handler.js';
+        
         // Configuration
         const SERVER_URL = window.location.hostname + ":" + window.location.port;
         const USE_SSL = window.location.protocol === 'https:';
@@ -128,8 +131,14 @@
         // Intensity control elements
         const intensitySlider = document.getElementById('intensitySlider');
         const intensityValue = document.getElementById('intensityValue');
+        
+        // Export functions to global scope for HTML onclick attributes
+        window.sendCommand = sendCommand;
+        window.togglePause = togglePause;
 
+        // Function to send command to switch sources
         function sendCommand(index) {
+            console.log(`Sending command to switch to source ${index}`);
             fetch(`${API_URL}/switch_source/performer1/${index}`, {
                 method: 'POST',
                 headers: {
@@ -138,8 +147,25 @@
                 body: JSON.stringify({ index: index })
             })
             .then(response => response.json())
-            .then(data => console.log('Success:', data))
-            .catch((error) => console.error('Error:', error));
+            .then(data => {
+                console.log('Source switch success:', data);
+                
+                // Highlight the active button
+                const buttonIds = ['ahaukin', 'ixchel', 'chacbolay', 'off'];
+                
+                // Reset all buttons
+                buttonIds.forEach(id => {
+                    const button = document.getElementById(id);
+                    if (button) button.style.opacity = "1.0";
+                });
+                
+                // Highlight the active one
+                if (index >= 0 && index < buttonIds.length) {
+                    const button = document.getElementById(buttonIds[index]);
+                    if (button) button.style.opacity = "0.7";
+                }
+            })
+            .catch((error) => console.error('Error switching source:', error));
         }
         
         function togglePause() {
@@ -170,72 +196,80 @@
         // Initialize WebSocket connection
         function connectWebSocket() {
             if (socket && socket.readyState === WebSocket.OPEN) {
+                console.log('WebSocket already connected');
                 return;
             }
             
             console.log(`Connecting to WebSocket at ${WS_URL}/ws/director/${SESSION_ID}`);
-            socket = new WebSocket(`${WS_URL}/ws/director/${SESSION_ID}`);
+            const ws = new WebSocket(`${WS_URL}/ws/director/${SESSION_ID}`);
             
-            socket.onopen = function() {
+            // Use the imported setupWebSocketHandler to manage the connection
+            socket = setupWebSocketHandler(ws, {
+                onIntensityUpdate: (intensity) => {
+                    // Update the slider when intensity is changed by others
+                    intensitySlider.value = Math.round(intensity * 100);
+                    intensityValue.textContent = intensity.toFixed(1);
+                },
+                onSourceSwitched: (data) => {
+                    console.log(`Source switched to: ${data.sourceName}`);
+                }
+            });
+            
+            // Set up event listeners for the websocket events
+            document.addEventListener('websocket:open', () => {
                 console.log('WebSocket connected');
                 if (reconnectTimer) {
                     clearTimeout(reconnectTimer);
                     reconnectTimer = null;
                 }
-                
-                // Start heartbeat to keep connection alive
-                if (heartbeatInterval) {
-                    clearInterval(heartbeatInterval);
-                }
-                heartbeatInterval = setInterval(() => {
-                    if (socket.readyState === WebSocket.OPEN) {
-                        socket.send("heartbeat");
-                    }
-                }, 30000); // 30 seconds
-            };
+            });
             
-            socket.onclose = function() {
+            document.addEventListener('websocket:close', () => {
                 console.log('WebSocket disconnected');
-                if (heartbeatInterval) {
-                    clearInterval(heartbeatInterval);
-                    heartbeatInterval = null;
-                }
                 
                 // Try to reconnect after 3 seconds
                 if (!reconnectTimer) {
                     reconnectTimer = setTimeout(connectWebSocket, 3000);
                 }
-            };
+            });
             
-            socket.onerror = function(error) {
-                console.error('WebSocket error:', error);
-            };
+            document.addEventListener('websocket:error', (e) => {
+                console.error('WebSocket error:', e.detail.error);
+            });
             
-            socket.onmessage = function(event) {
-                try {
-                    const data = JSON.parse(event.data);
-                    console.log('Received WebSocket message:', data);
-                    
-                    // Handle intensity updates from other clients
-                    if (data.action === 'intensity_update' && data.initiator !== 'director') {
-                        const intensity = parseFloat(data.value);
-                        intensitySlider.value = Math.round(intensity * 100);
-                        intensityValue.textContent = intensity.toFixed(1);
-                    }
-                } catch (e) {
-                    console.error('Error parsing WebSocket message:', e);
+            // Specific handler for source switching with detailed logging
+            document.addEventListener('websocket:source_switched', (e) => {
+                console.log(`Source switched to: ${e.detail.sourceName} (index: ${e.detail.sourceIndex}, initiated by: ${e.detail.initiatedBy || 'unknown'})`);
+                
+                // Highlight the active button based on the source index
+                const sourceIndex = e.detail.sourceIndex;
+                const buttonIds = ['ahaukin', 'ixchel', 'chacbolay', 'off'];
+                
+                // Reset all buttons
+                buttonIds.forEach(id => {
+                    const button = document.getElementById(id);
+                    if (button) button.style.opacity = "1.0";
+                });
+                
+                // Highlight the active one if it's in range
+                if (sourceIndex >= 0 && sourceIndex < buttonIds.length) {
+                    const button = document.getElementById(buttonIds[sourceIndex]);
+                    if (button) button.style.opacity = "0.7"; // Make it slightly transparent to show it's active
                 }
-            };
+            });
         }
         
         // Send intensity update over WebSocket
         function sendIntensityUpdate(value) {
             if (socket && socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify({
+                socket.sendJson({
                     action: 'intensity_update',
                     value: value,
-                    initiator: 'director'
-                }));
+                    initiated_by: 'director'
+                });
+                console.log(`Sent intensity update: ${value}`);
+            } else {
+                console.warn('Cannot send intensity update: socket not connected');
             }
         }
         

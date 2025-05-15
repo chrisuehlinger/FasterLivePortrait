@@ -16,14 +16,25 @@ from .proxy_connection import ProxyConnection
 # Define TypedDict classes for message structures
 class SourceSwitchedMessage(TypedDict):
     """Message sent when a source has been switched"""
-    status: str  # "source_switched"
+    action: str  # "source_switched"
     current_source: int  # Source index
     source_name: str  # Name of the source image
 
 class IntensityUpdateMessage(TypedDict):
     """Message sent with animation intensity updates"""
-    status: str  # "intensity_update"
+    action: str  # "intensity_update"
     value: float  # Intensity value (0.0 to 1.0)
+
+class WebSocketMessage(TypedDict, total=False):
+    """Generic WebSocket message structure supporting both text and binary data"""
+    action: str  # Message action type
+    status: str  # Message status (backwards compatibility)
+    session_id: str  # Session identifier
+    message: str  # Optional text message
+    value: float  # Optional numeric value
+    current_source: int  # For source switching
+    source_name: str  # For source switching
+    initiated_by: str  # Client that initiated the action
 
 # Define TypedDict for performance metrics
 class PerformanceMetrics(TypedDict):
@@ -84,6 +95,7 @@ class ConnectionManager:
 
         # New attribute to store the latest intensity value for each session
         self.animation_intensity: Dict[str, float] = {}
+        self.paused_sessions: Dict[str, bool] = {}  # Track which sessions are paused
     
     async def connect_actor(self, session_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -445,57 +457,59 @@ class ConnectionManager:
                 logger.error(f"Error sending preview to actor in session {session_id}: {e}")
 
     # New method to send notifications to viewers when source is switched
-    async def notify_viewers_source_switched(self, session_id: str, source_index: int, source_name: str) -> None:
-        """Notify all viewers that the source image has been switched"""
-        logger.info(f"Notifying viewers of source switch in session {session_id}: {source_index} - {source_name}")
-        if session_id not in self.viewer_connections:
-            logger.warning(f"No viewers connected for session {session_id}")
-            return
-            
+    async def notify_viewers_source_switched(self, session_id: str, source_index: int, source_name: str, initiated_by: str = "server") -> None:
+        """Notify all clients that the source image has been switched (initiated by viewers or server)"""
+        logger.info(f"Broadcasting source switch in session {session_id}: {source_index} - {source_name} (initiated by {initiated_by})")
+        
         message: SourceSwitchedMessage = {
-            "status": "source_switched", 
+            "action": "source_switched", 
             "current_source": source_index,
-            "source_name": source_name
+            "source_name": source_name,
+            "initiated_by": initiated_by
         }
         
-        disconnected_viewers: List[WebSocket] = []
-        for viewer_websocket in self.viewer_connections[session_id]:
-            try:
-                logger.info(f"Sending source switch notification to viewer in session {session_id}: {message}")
-                await viewer_websocket.send_json(message)
-            except Exception as e:
-                logger.error(f"Error sending source switch notification to viewer in session {session_id}: {e}")
-                disconnected_viewers.append(viewer_websocket)
+        # Broadcast to all client types
+        await self.broadcast_message(session_id, message)
+
+    # Send notifications when source is switched by director or server
+    async def notify_actors_source_switched(self, session_id: str, source_index: int, source_name: str, initiated_by: str = "director") -> None:
+        """Notify all clients that the source image has been switched (initiated by director or server)"""
+        logger.info(f"Broadcasting source switch in session {session_id}: {source_index} - {source_name} (initiated by {initiated_by})")
+        
+        message: SourceSwitchedMessage = {
+            "action": "source_switched", 
+            "current_source": source_index,
+            "source_name": source_name,
+            "initiated_by": initiated_by
+        }
+        
+        # Broadcast to all client types
+        await self.broadcast_message(session_id, message)
+
+    async def broadcast_message(self, session_id: str, message: Union[WebSocketMessage, Dict[str, Any]], exclude_websocket: Optional[WebSocket] = None, include_client_types: Optional[List[str]] = None) -> None:
+        """
+        Broadcast a message to all connected clients for a session
+        
+        Args:
+            session_id: The session ID to broadcast to
+            message: The message to broadcast
+            exclude_websocket: Optional WebSocket to exclude from broadcast (e.g., the sender)
+            include_client_types: Optional list of client types to include ('actor', 'viewer', 'director')
+                                  If None, broadcast to all client types
+        """
+        try:
+            # Ensure message has session_id
+            if isinstance(message, dict) and 'session_id' not in message:
+                message_with_session = message.copy()
+                message_with_session['session_id'] = session_id
+            else:
+                message_with_session = message
                 
-        # Remove any disconnected viewers
-        for websocket in disconnected_viewers:
-            self.viewer_connections[session_id].remove(websocket)
-
-    # New method to send notifications to viewers when source is switched
-    async def notify_actors_source_switched(self, session_id: str, source_index: int, source_name: str) -> None:
-        """Notify all actors that the source image has been switched"""
-        logger.info(f"Notifying actors of source switch in session {session_id}: {source_index} - {source_name}")
-        if session_id not in self.actor_connections:
-            return
+            message_json: str = json.dumps(message_with_session)
+            client_types = include_client_types or ['viewer', 'actor', 'director']
             
-        message: SourceSwitchedMessage = {
-            "status": "source_switched", 
-            "current_source": source_index,
-            "source_name": source_name
-        }
-        
-        try:
-            await self.actor_connections[session_id].send_json(message)
-        except Exception as e:
-            logger.error(f"Error sending source switch notification to actor in session {session_id}: {e}")
-
-    async def broadcast_message(self, session_id: str, message: Union[SourceSwitchedMessage, IntensityUpdateMessage], exclude_websocket: Optional[WebSocket] = None) -> None:
-        """Broadcast a message to all connected clients for a session"""
-        try:
-            message_json: str = json.dumps(message)
-            
-            # Send to all viewers
-            if session_id in self.viewer_connections:
+            # Send to all viewers if included
+            if 'viewer' in client_types and session_id in self.viewer_connections:
                 for websocket in self.viewer_connections[session_id]:
                     if websocket != exclude_websocket:
                         try:
@@ -503,16 +517,16 @@ class ConnectionManager:
                         except Exception as e:
                             logger.error(f"Error sending message to viewer in session {session_id}: {e}")
             
-            # Send to actor
-            if session_id in self.actor_connections:
+            # Send to actor if included
+            if 'actor' in client_types and session_id in self.actor_connections:
                 if self.actor_connections[session_id] != exclude_websocket:
                     try:
                         await self.actor_connections[session_id].send_text(message_json)
                     except Exception as e:
                         logger.error(f"Error sending message to actor in session {session_id}: {e}")
             
-            # Send to directors
-            if session_id in self.director_connections:
+            # Send to directors if included
+            if 'director' in client_types and session_id in self.director_connections:
                 for websocket in self.director_connections[session_id]:
                     if websocket != exclude_websocket:
                         try:
@@ -523,19 +537,36 @@ class ConnectionManager:
         except Exception as e:
             logger.error(f"Error broadcasting message for session {session_id}: {e}")
     
+    def _determine_client_type(self, session_id: str, websocket: WebSocket) -> str:
+        """Determine the client type (actor, director, or viewer) of a websocket connection"""
+        if session_id in self.actor_connections and self.actor_connections[session_id] == websocket:
+            return "actor"
+        
+        if session_id in self.director_connections and websocket in self.director_connections[session_id]:
+            return "director"
+            
+        if session_id in self.viewer_connections and websocket in self.viewer_connections[session_id]:
+            return "viewer"
+            
+        return "unknown"
+    
     async def handle_intensity_update(self, session_id: str, intensity: float, websocket: WebSocket) -> None:
         """Handle an intensity update from any client and broadcast to all others"""
         try:
             # Store the latest intensity value
             self.animation_intensity[session_id] = float(intensity)
             
+            # Determine which client type sent the update
+            client_type = self._determine_client_type(session_id, websocket)
+            
             # Create the message to broadcast
             message: IntensityUpdateMessage = {
-                "status": "intensity_update",
-                "value": intensity
+                "action": "intensity_update",
+                "value": intensity,
+                "initiated_by": client_type
             }
             
-            logger.info(f"Broadcasting intensity update for session {session_id}: {intensity}")
+            logger.info(f"Broadcasting intensity update for session {session_id}: {intensity} (from {client_type})")
             
             # Broadcast to all clients except the sender
             await self.broadcast_message(session_id, message, exclude_websocket=websocket)

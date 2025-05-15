@@ -308,10 +308,11 @@ class Server:
                     proxy_sources: List[int]
                     proxy_target: Optional[str]
 
-                # Send a confirmation to the actor
+                # Prepare connection confirmation message
                 response: ActorResponse = {
-                    "status": "connected", 
-                    "session_id": session_id
+                    "action": "connected", 
+                    "session_id": session_id,
+                    "client_type": "actor"
                 }
                 
                 # Add info about multiple sources if available
@@ -327,7 +328,9 @@ class Server:
                         response["proxy_sources"] = self.proxy_sources
                         response["proxy_target"] = self.proxy_target
                 
+                # Send to the actor directly for immediate feedback, then broadcast to all
                 await websocket.send_json(response)
+                await self.connection_manager.broadcast_message(session_id, response, exclude_websocket=websocket)
                 
                 # Setup last key press time to prevent too frequent source switching
                 last_key_press_time: float = 0.0
@@ -378,17 +381,17 @@ class Server:
                                     # Handle proxy switching if needed
                                     await self.connection_manager.handle_proxy_switch(session_id, old_index, source_new_index)
                                     
-                                    # Send confirmation back to actor
-                                    await websocket.send_json({
-                                        "status": "source_switched",
+                                    # Create source switch message
+                                    source_switch_message = {
+                                        "action": "source_switched",
                                         "current_source": source_new_index,
-                                        "source_name": os.path.basename(self.processor.src_image_paths[source_new_index])
-                                    })
+                                        "source_name": os.path.basename(self.processor.src_image_paths[source_new_index]),
+                                        "initiated_by": "actor"
+                                    }
                                     
-                                    # Notify viewers about the source switch
-                                    await self.connection_manager.notify_viewers_source_switched(
-                                        session_id, source_new_index, os.path.basename(self.processor.src_image_paths[source_new_index])
-                                    )
+                                    # Send to actor directly for immediate feedback, then broadcast to all
+                                    await websocket.send_json(source_switch_message)
+                                    await self.connection_manager.broadcast_message(session_id, source_switch_message, exclude_websocket=websocket)
                                     
                             # Handle key press events for source switching
                             elif command.get("action") == "key_press" and hasattr(self, 'has_multiple_sources') and self.has_multiple_sources:
@@ -407,17 +410,18 @@ class Server:
                                             # Handle proxy switching if needed
                                             await self.connection_manager.handle_proxy_switch(session_id, source_old_index, source_new_index)
                                             
-                                            # Send confirmation back to actor
-                                            await websocket.send_json({
-                                                "status": "source_switched",
+                                            # Create source switch message
+                                            source_switch_message = {
+                                                "action": "source_switched",
                                                 "current_source": source_new_index,
-                                                "source_name": os.path.basename(self.processor.src_image_paths[source_new_index])
-                                            })
+                                                "source_name": os.path.basename(self.processor.src_image_paths[source_new_index]),
+                                                "initiated_by": "actor",
+                                                "key_pressed": key
+                                            }
                                             
-                                            # Notify viewers about the source switch
-                                            await self.connection_manager.notify_viewers_source_switched(
-                                                session_id, source_new_index, os.path.basename(self.processor.src_image_paths[source_new_index])
-                                            )
+                                            # Send to actor directly for immediate feedback, then broadcast to all
+                                            await websocket.send_json(source_switch_message)
+                                            await self.connection_manager.broadcast_message(session_id, source_switch_message, exclude_websocket=websocket)
                                             
                         except json.JSONDecodeError:
                             logger.error(f"Received invalid JSON command: {message['text']}")
@@ -459,11 +463,12 @@ class Server:
                     sources: List[str]
                     current_source: int
 
-                # Send a confirmation to the director
+                # Prepare confirmation message for the director
                 response: DirectorResponse = {
-                    "status": "connected", 
+                    "action": "connected", 
                     "session_id": session_id,
-                    "message": "Connected to stream. Waiting for video..."
+                    "message": "Connected to stream. Waiting for video...",
+                    "client_type": "director"
                 }
                 
                 # Add info about multiple sources if available
@@ -475,22 +480,26 @@ class Server:
                     response["sources"] = [os.path.basename(path) for path in processor.src_image_paths]
                     response["current_source"] = processor.current_source_index
                 
+                # Send to the director directly for immediate feedback, then broadcast to all
                 await websocket.send_json(response)
+                await self.connection_manager.broadcast_message(session_id, response, exclude_websocket=websocket)
                 
                 # Send the current intensity if available
                 if session_id in self.connection_manager.animation_intensity:
-                    await websocket.send_json({
+                    intensity_message = {
                         "action": "intensity_update",
-                        "value": self.connection_manager.animation_intensity[session_id]
-                    })
+                        "value": self.connection_manager.animation_intensity[session_id],
+                        "client_type": "director"
+                    }
+                    await websocket.send_json(intensity_message)
                 
                 while True:
                     # This will wait for any message from the client (like heartbeats or commands)
                     message: str = await websocket.receive_text()
                     
-                    # If it's a heartbeat, respond
+                    # If it's a heartbeat, respond only to the sender
                     if message == "heartbeat":
-                        await websocket.send_json({"status": "heartbeat_ack"})
+                        await websocket.send_json({"action": "heartbeat_ack"})
                     else:
                         # Define intensity update command structure
                         class IntensityCommand(TypedDict, total=False):
@@ -532,11 +541,12 @@ class Server:
                     current_source: int
                     source_name: str
                 
-                # Send confirmation to the viewer
+                # Prepare confirmation message for the viewer
                 response: ViewerResponse = {
-                    "status": "connected", 
+                    "action": "connected", 
                     "session_id": session_id,
-                    "message": "Connected to stream. Waiting for video..."
+                    "message": "Connected to stream. Waiting for video...",
+                    "client_type": "viewer"
                 }
                 
                 # Add info about current source if available
@@ -545,22 +555,26 @@ class Server:
                     response["current_source"] = processor.current_source_index
                     response["source_name"] = os.path.basename(processor.src_image_paths[processor.current_source_index])
                 
+                # Send to the viewer directly for immediate feedback, then broadcast to all
                 await websocket.send_json(response)
+                await self.connection_manager.broadcast_message(session_id, response, exclude_websocket=websocket)
                 
                 # Send the current intensity if available
                 if session_id in self.connection_manager.animation_intensity:
-                    await websocket.send_json({
+                    intensity_message = {
                         "action": "intensity_update",
-                        "value": self.connection_manager.animation_intensity[session_id]
-                    })
+                        "value": self.connection_manager.animation_intensity[session_id],
+                        "client_type": "viewer"
+                    }
+                    await websocket.send_json(intensity_message)
                 
                 while True:
                     # This will wait for any message from the client (like heartbeats or viewer commands)
                     message: str = await websocket.receive_text()
                     
-                    # If it's a heartbeat, respond
+                    # If it's a heartbeat, respond only to the sender
                     if message == "heartbeat":
-                        await websocket.send_json({"status": "heartbeat_ack"})
+                        await websocket.send_json({"action": "heartbeat_ack"})
                     else:
                         # Define intensity update command structure
                         class IntensityCommand(TypedDict, total=False):
