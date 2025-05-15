@@ -17,7 +17,6 @@ COPY ./src/models/XPose /root/FasterLivePortrait/src/models/XPose
 # RUN npm run build
 WORKDIR /root/FasterLivePortrait
 
-COPY ./spd_editor /root/FasterLivePortrait/spd_editor
 COPY ./configs /root/FasterLivePortrait/configs
 COPY ./scripts /root/FasterLivePortrait/scripts
 COPY ./src /root/FasterLivePortrait/src
