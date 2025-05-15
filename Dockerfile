@@ -4,6 +4,8 @@ RUN mkdir /root/FasterLivePortrait
 COPY ./requirements.txt /root/FasterLivePortrait/requirements.txt
 WORKDIR /root/FasterLivePortrait
 
+RUN apt update && apt install python3-tk -y
+
 RUN pip install -r requirements.txt
 
 COPY ./src/models/XPose /root/FasterLivePortrait/src/models/XPose

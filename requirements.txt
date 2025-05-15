@@ -20,3 +20,6 @@ uvicorn
 websockets
 av
 mypy
+pillow
+# GUI dependencies
+tk
