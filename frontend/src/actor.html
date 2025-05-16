@@ -70,6 +70,7 @@
         }
         .inactive-camera {
             filter: grayscale(100%);
+            order:2;
         }
         button {
             background-color: #3498db;
@@ -237,7 +238,7 @@
     </div>
 
     <script type="module">
-        import { setupWebSocketHandler, sendIntensityUpdate } from './js/websocket-handler.js';
+        import { setupWebSocketHandler, sendIntensityUpdate, MESSAGE_TYPES } from './js/websocket-handler.js';
         
         // Configuration
         const SERVER_URL = window.location.hostname + ":" + window.location.port;
@@ -598,18 +599,23 @@
                     const data = e.detail.data;
                     if (typeof data === 'string') {
                         bytesReceived += data.length;
-                        
-                        // Check for camera switching message
-                        try {
-                            const parsedData = JSON.parse(data);
-                            if (parsedData.action === "switch_camera" && 
-                                (parsedData.index === 0 || parsedData.index === 1)) {
-                                switchActiveCamera(parsedData.index);
-                            }
-                        } catch (err) {
-                            // Not JSON or not relevant
-                        }
                     }
+                });
+                
+                // Add specific handler for camera switching messages
+                document.addEventListener('websocket:switch_camera', (e) => {
+                    if (e.detail.index === 0 || e.detail.index === 1) {
+                        console.log(`Received switch_camera command to camera ${e.detail.index}`);
+                        switchActiveCamera(e.detail.index);
+                    }
+                });
+                
+                // Add specific handler for source switching that affects camera selection
+                document.addEventListener('websocket:source_switched', (e) => {
+                    // Switch to bottom camera if index is 2, otherwise top camera
+                    const cameraIndex = e.detail.sourceIndex === 1 ? 1 : 0;
+                    console.log(`Switching camera based on source index ${e.detail.sourceIndex} -> camera ${cameraIndex}`);
+                    switchActiveCamera(cameraIndex);
                 });
                 
             } catch (error) {
@@ -837,6 +843,7 @@
                 }
             }
         }
+        document.addEventListener('keydown', handleKeyPress);
         
         // Update source UI with current selection
         function updateSourceUI(index) {
