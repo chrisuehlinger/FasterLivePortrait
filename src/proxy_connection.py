@@ -65,7 +65,7 @@ class ProxyConnection:
         """Get a processed frame from the remote server"""
         try:
             # Use the queue with a timeout
-            return await asyncio.wait_for(self.queue.get(), timeout=2.0)
+            return await asyncio.wait_for(self.queue.get(), timeout=0.25)
         except asyncio.TimeoutError:
             logger.error("Timeout waiting for processed frame from proxy")
             return None

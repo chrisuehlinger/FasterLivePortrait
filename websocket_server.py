@@ -235,26 +235,12 @@ class Server:
             session_id_param: str = str(request.get("session_id", "performer1"))
             index_param: int = int(request.get("index", 0))
             source_old_index: int = self.processor.current_source_index
-            
-            # Update proxy status if needed
-            await self.connection_manager.handle_proxy_switch(session_id_param, source_old_index, index_param)
+            image_path: str = os.path.basename(self.processor.src_image_paths[index_param])
             
             self.processor.switch_source(index_param)
-                                        
-            # Notify viewers about the source switch
-            await self.connection_manager.notify_viewers_source_switched(
-                session_id_param, index_param, os.path.basename(self.processor.src_image_paths[index_param])
+            return await self.connection_manager.switch_source(
+                session_id_param, index_param, source_old_index, image_path
             )
-            
-            # Notify actors about the source switch
-            await self.connection_manager.notify_actors_source_switched(
-                session_id_param, index_param, os.path.basename(self.processor.src_image_paths[index_param])
-            )
-
-            return {
-                "session_id": session_id_param,
-                "status": "success"
-            }
         
         # Define request and response types for toggling pause state
         class PauseRequest(TypedDict, total=False):

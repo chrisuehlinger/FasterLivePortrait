@@ -97,6 +97,7 @@ class ConnectionManager:
         # New attribute to store the latest intensity value for each session
         self.animation_intensity: Dict[str, float] = {}
         self.paused_sessions: Dict[str, bool] = {}  # Track which sessions are paused
+        self.is_first_frame_after_switch: bool = True
     
     async def connect_actor(self, session_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -200,7 +201,26 @@ class ConnectionManager:
             except ValueError:
                 # WebSocket was not in the list
                 pass
-    
+
+    async def switch_source(self, session_id_param: str, index_param: int, source_old_index: int, image_path: str) -> Any:
+        self.is_first_frame_after_switch = True
+        # Update proxy status if needed
+        await self.handle_proxy_switch(session_id_param, source_old_index, index_param)
+                                    
+        # Notify viewers about the source switch
+        await self.notify_viewers_source_switched(
+            session_id_param, index_param, image_path
+        )
+        
+        # Notify actors about the source switch
+        await self.notify_actors_source_switched(
+            session_id_param, index_param, image_path
+        )
+
+        return {
+            "session_id": session_id_param,
+            "status": "success"
+        }
     def set_proxy_sources(self, session_id: str, proxy_sources: List[int], proxy_target: str) -> None:
         """Configure which sources should be proxied for a session"""
         self.proxy_sources[session_id] = set(proxy_sources)
@@ -234,7 +254,7 @@ class ConnectionManager:
             # Switching from a proxied source to a local one
             logger.info(f"Switching from proxied source {from_index} to local source {to_index}")
             if session_id in self.proxy_connections:
-                await self.proxy_connections[session_id].disconnect()
+                self.proxy_connections[session_id].disconnect()
             self.current_proxy_active[session_id] = False
     
     async def receive_frame(self, session_id: str, frame: np.ndarray) -> bool:
@@ -298,6 +318,16 @@ class ConnectionManager:
                     use_proxy: bool = (session_id in self.proxy_sources and 
                                 current_source_index in self.proxy_sources[session_id] and
                                 session_id in self.proxy_connections)
+                    
+                    if self.is_first_frame_after_switch:
+                        logger.info(f"First frame after source switch for session {session_id}: {current_source_index}")
+                        self.is_first_frame_after_switch = False
+                        processed_frame: Optional[np.ndarray] = processor.src_images[current_source_index]
+                        success, encoded_img = cv2.imencode('.jpg', processed_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                        if not success:
+                            continue
+                        local_binary_img: bytes = encoded_img.tobytes()
+                        await self._send_bytes_to_viewers(local_binary_img, session_id)
                     
                     if use_proxy:
                         # PROXY MODE: Send frame to remote server and wait for result
@@ -463,6 +493,7 @@ class ConnectionManager:
         """Notify all clients that the source image has been switched (initiated by viewers or server)"""
         logger.info(f"Broadcasting source switch in session {session_id}: {source_index} - {source_name} (initiated by {initiated_by})")
         
+
         message: SourceSwitchedMessage = {
             "action": "source_switched", 
             "current_source": source_index,
