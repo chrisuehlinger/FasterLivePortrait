@@ -614,7 +614,7 @@ class FasterLivePortraitPipeline:
                         delta_new[:, idx, :] = x_d_exp_smooth[:, idx, :] if self.is_source_video else (5 if self.is_animal else 2)*x_d_i_info['exp'][
                                                                                                       :, idx, :]
                     for idx in [6, 12, 14, 17, 19, 20]:
-                        delta_new[:, idx, :] = x_d_exp_smooth[:, idx, :] if self.is_source_video else (10 if self.is_animal else 3)*x_d_i_info['exp'][
+                        delta_new[:, idx, :] = x_d_exp_smooth[:, idx, :] if self.is_source_video else (5 if self.is_animal else 3)*x_d_i_info['exp'][
                                                                                                       :, idx, :]
                     delta_new[:, 3:5, 1] = x_d_exp_smooth[:, 3:5, 1] if self.is_source_video else x_d_i_info['exp'][:,
                                                                                                   3:5, 1]

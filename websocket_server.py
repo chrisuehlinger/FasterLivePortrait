@@ -137,24 +137,27 @@ class Server:
             logger.info(f"Is animal model: {config.is_animal}")
             
             try:
-                # Handle transparency in source images
+                # Check for FSP files and log appropriately
                 for i, path in enumerate(source_images):
-                    # Check if the image has an alpha channel (transparency)
-                    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
-                    if img is not None and img.shape[-1] == 4:
-                        # Image has alpha channel
-                        logger.info(f"Source image {i+1} has transparency. Replacing transparent pixels with green.")
-                        # Create a green background (BGR format)
-                        green_background = np.ones((img.shape[0], img.shape[1], 3), dtype=np.uint8) * np.array([0, 255, 0], dtype=np.uint8)
-                        # Extract alpha channel
-                        alpha = img[:, :, 3] / 255.0
-                        # Convert to 3 channels (drop alpha)
-                        rgb = img[:, :, :3]
-                        # Alpha blend with green background
-                        result = (rgb * alpha[:, :, np.newaxis] + green_background * (1 - alpha[:, :, np.newaxis])).astype(np.uint8)
-                        # Save back to the file
-                        cv2.imwrite(path, result)
-                        logger.info(f"Updated source image {i+1} with transparent pixels replaced by green")
+                    if path.lower().endswith('.fsp') or path.lower().endswith('.pkl'):
+                        logger.info(f"Source image {i+1} is an FSP file: {path}")
+                    else:
+                        # Handle transparency in regular image files
+                        img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+                        if img is not None and img.shape[-1] == 4:
+                            # Image has alpha channel
+                            logger.info(f"Source image {i+1} has transparency. Replacing transparent pixels with green.")
+                            # Create a green background (BGR format)
+                            green_background = np.ones((img.shape[0], img.shape[1], 3), dtype=np.uint8) * np.array([0, 255, 0], dtype=np.uint8)
+                            # Extract alpha channel
+                            alpha = img[:, :, 3] / 255.0
+                            # Convert to 3 channels (drop alpha)
+                            rgb = img[:, :, :3]
+                            # Alpha blend with green background
+                            result = (rgb * alpha[:, :, np.newaxis] + green_background * (1 - alpha[:, :, np.newaxis])).astype(np.uint8)
+                            # Save back to the file
+                            cv2.imwrite(path, result)
+                            logger.info(f"Updated source image {i+1} with transparent pixels replaced by green")
                 
                 self.processor: FasterLivePortraitProcessor = FasterLivePortraitProcessor(
                     config_path=config.config_path,

@@ -1,4 +1,5 @@
 import asyncio
+import traceback
 import cv2
 import numpy as np
 import time
@@ -416,6 +417,7 @@ class ConnectionManager:
                     break
                 except Exception as e:
                     logger.error(f"Error processing frame for session {session_id}: {e}")
+                    print(traceback.format_exc())
                 finally:
                     self.is_processing[session_id] = False
                     

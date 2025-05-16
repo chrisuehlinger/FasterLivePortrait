@@ -4,7 +4,7 @@
 set -e
 
 # Configuration
-CONFIG="configs/onnx_infer.yaml"
+CONFIG="configs/trt_infer.yaml"
 SRC_IMAGE="assets/examples/source/ahau-kin.png"
 DRI_VIDEO="assets/examples/driving/d14.mp4"
 PREPROCESSED="assets/examples/source/ahau-kin.fsp"

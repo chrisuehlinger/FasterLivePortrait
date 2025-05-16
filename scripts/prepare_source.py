@@ -25,7 +25,7 @@ def main():
     cfg_raw = OmegaConf.load(args.cfg)
     cfg: DictConfig = cast(DictConfig, cfg_raw)
     # Ensure pasteback disabled for preprocessing
-    cfg.infer_params.flag_pasteback = False
+    cfg.infer_params.flag_pasteback = True
 
     # Instantiate pipeline
     pipe = FasterLivePortraitPipeline(cfg=cfg, is_animal=args.animal)

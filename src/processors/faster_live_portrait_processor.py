@@ -9,6 +9,7 @@ import os
 import cv2
 import numpy as np
 import time
+import pickle
 from typing import List, Dict, Any, Tuple, Optional, Union, cast
 from typing_extensions import TypedDict
 from omegaconf import OmegaConf, DictConfig
@@ -71,110 +72,85 @@ class FasterLivePortraitProcessor(BaseVideoProcessor):
         try:
             self.pipeline = FasterLivePortraitPipeline(cfg=self.config, is_animal=is_animal)
             
-            # First, load all source images and get their dimensions
-            max_width: int = 0
-            max_height: int = 0
-            original_images: List[np.ndarray] = []
-            
-            # First pass: determine the largest dimensions
-            for idx, path in enumerate(self.src_image_paths):
-                logger.info(f"Loading source image {idx + 1}: {path}")
-                img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
-                if img is None:
-                    raise ValueError(f"Could not load source image {idx + 1}: {path}")
+            # Process each source image path
+            for src_path in self.src_image_paths:
+                self._process_source(src_path)
                 
-                # Handle transparency in source images
-                if img.shape[-1] == 4:  # Image has alpha channel
-                    logger.info(f"Source image {idx + 1} has transparency. Replacing transparent pixels with green.")
-                    green_background = np.ones((img.shape[0], img.shape[1], 3), dtype=np.uint8) * np.array([0, 255, 0], dtype=np.uint8)
-                    alpha = img[:, :, 3] / 255.0
-                    rgb = img[:, :, :3]
-                    img = (rgb * alpha[:, :, np.newaxis] + green_background * (1 - alpha[:, :, np.newaxis])).astype(np.uint8)
-                
-                original_images.append(img)
-                h, w = img.shape[:2]
-                max_width = max(max_width, w)
-                max_height = max(max_height, h)
-            
-            logger.info(f"Detected max dimensions across all sources: {max_width}x{max_height}")
-            
-            # Second pass: resize and prepare all images
-            for idx, img in enumerate(original_images):
-                path = self.src_image_paths[idx]
-                h, w = img.shape[:2]
-                
-                # Store original image
-                self.src_originals.append(img.copy())
-                
-                # If image is not the maximum size, resize it
-                if h != max_height or w != max_width:
-                    logger.info(f"Resizing source {idx + 1} from {w}x{h} to {max_width}x{max_height}")
-                    
-                    # Determine resize scale to maintain aspect ratio
-                    scale: float = max(max_width / w, max_height / h)
-                    new_w: int = int(w * scale)
-                    new_h: int = int(h * scale)
-                    
-                    # Resize to fill target dimensions while maintaining aspect ratio
-                    resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
-                    
-                    # Center crop to target dimensions
-                    y_center: int = new_h // 2
-                    x_center: int = new_w // 2
-                    y_start: int = max(0, y_center - max_height // 2)
-                    x_start: int = max(0, x_center - max_width // 2)
-                    
-                    # Handle edge case where resized image is still smaller than target in one dimension
-                    if new_h < max_height:
-                        y_start = 0
-                    if new_w < max_width:
-                        x_start = 0
-                    
-                    # Create a blank canvas of target size
-                    normalized_img = np.zeros((max_height, max_width, 3), dtype=np.uint8)
-                    
-                    # Calculate region to paste the resized image
-                    paste_h: int = min(max_height, new_h)
-                    paste_w: int = min(max_width, new_w)
-                    
-                    # Paste the center portion of the resized image
-                    normalized_img[0:paste_h, 0:paste_w] = resized[
-                        y_start:y_start + paste_h, 
-                        x_start:x_start + paste_w
-                    ]
-                    
-                    # Use the normalized image
-                    img = normalized_img
-                
-                # Prepare the source image with the pipeline
-                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                
-                # Save a temporary file for the pipeline to process
-                temp_path: str = f"/tmp/normalized_source_{idx}.jpg"
-                cv2.imwrite(temp_path, img)
-                
-                # Process with the pipeline
-                success: bool = self.pipeline.prepare_source(temp_path, realtime=True)
-                if not success:
-                    raise ValueError(f"Could not process source image {idx + 1}: {path}")
-                
-                # Store processed source data
-                self.src_images.append(self.pipeline.src_imgs[0])
-                self.src_infos.append(self.pipeline.src_infos[0])
-                
-                # Clean up temporary file
-                try:
-                    os.remove(temp_path)
-                except:
-                    pass
-            
             # Use dimensions from config
             self.input_size = (256, 256)
-            logger.info(f"FasterLivePortrait initialized with {len(self.src_image_paths)} normalized source images")
+            logger.info(f"FasterLivePortrait initialized with {len(self.src_image_paths)} source images")
             
         except Exception as e:
             logger.error(f"Error initializing FasterLivePortrait: {e}")
             raise
+    
+    def _process_source(self, src_path: str) -> None:
+        """Process a source image path, handling both regular images and FSP files"""
+        # Check if this is an FSP file (by extension or content)
+        if src_path.lower().endswith('.fsp') or src_path.lower().endswith('.pkl'):
+            logger.info(f"Loading source data from FSP file: {src_path}")
+            try:
+                # Load serialized source data
+                with open(src_path, 'rb') as f:
+                    data = pickle.load(f)
+                
+                # Verify version if present
+                if 'version' in data and data['version'] != 1:
+                    logger.warning(f"FSP file version mismatch: {data.get('version', 'unknown')}, expected 1")
+                
+                # Append the first image from the FSP data
+                self.src_images.append(data['src_imgs'][0])
+                self.src_originals.append(data['src_imgs'][0].copy())
+                
+                # Append the source info for the first frame and first face
+                self.src_infos.append(data['src_infos'][0])
+                
+                # Set pipeline attributes required for proper operation
+                self.pipeline.is_source_video = data.get('is_source_video', False)
+                
+                # We've loaded the preprocessed data, no need to run prepare_source
+                logger.info(f"Successfully loaded FSP data from {src_path}")
+            except Exception as e:
+                logger.error(f"Error loading FSP file {src_path}: {e}")
+                raise
+        else:
+            # Regular image processing path
+            logger.info(f"Processing regular source image: {src_path}")
+            
+            # First, load source image and get its dimensions
+            img = cv2.imread(src_path, cv2.IMREAD_UNCHANGED)
+            if img is None:
+                raise ValueError(f"Could not load source image: {src_path}")
+            
+            # Handle transparency in source images
+            if img.shape[-1] == 4:  # Image has alpha channel
+                logger.info(f"Source image has transparency. Replacing transparent pixels with green.")
+                green_background = np.ones((img.shape[0], img.shape[1], 3), dtype=np.uint8) * np.array([0, 255, 0], dtype=np.uint8)
+                alpha = img[:, :, 3] / 255.0
+                rgb = img[:, :, :3]
+                img = (rgb * alpha[:, :, np.newaxis] + green_background * (1 - alpha[:, :, np.newaxis])).astype(np.uint8)
+            
+            # Store original image
+            self.src_originals.append(img.copy())
+            
+            # Prepare the source image with the pipeline
+            temp_path: str = f"/tmp/normalized_source_{len(self.src_images)}.jpg"
+            cv2.imwrite(temp_path, img)
+            
+            # Process with the pipeline
+            success: bool = self.pipeline.prepare_source(temp_path, realtime=True)
+            if not success:
+                raise ValueError(f"Could not process source image: {src_path}")
+            
+            # Store processed source data
+            self.src_images.append(self.pipeline.src_imgs[0])
+            self.src_infos.append(self.pipeline.src_infos[0])
+            
+            # Clean up temporary file
+            try:
+                os.remove(temp_path)
+            except:
+                pass
             
     def switch_source(self, index: Optional[int]=None) -> int:
         """Switch to a specific source image or to the next one if index is None"""
