@@ -36,9 +36,9 @@ python websocket_server.py \
   --port 9090 \
   --host 0.0.0.0 \
   --config-path configs/trt_infer.yaml \
-  --source-image assets/examples/source/chac-bolay-head.png \
-  --source-image-2 assets/examples/source/chac-bolay-head.png \
-  --source-image-3 assets/examples/source/chac-bolay-head.png \
+  --source-image assets/examples/source/chac-bolay.fsp \
+  --source-image-2 assets/examples/source/chac-bolay.fsp \
+  --source-image-3 assets/examples/source/chac-bolay.fsp \
   --is-animal &
 
 # Wait for the target server to initialize

@@ -216,6 +216,13 @@ def run_with_video(args):
         # Load serialized source data
         with open(args.src_data, 'rb') as f:
             data = pickle.load(f)
+
+        print(str(data['src_infos'][0][0][5]))
+        # exit(1)
+        # data['src_infos'][0][0][1] = []
+        # data['src_infos'][0][0][3] = np.zeros(data['src_infos'][0][0][3].shape[:], dtype=np.float32)
+        # data['src_infos'][0][0][5] = np.zeros(data['src_infos'][0][0][5].shape[:], dtype=np.float32)
+
         pipe.is_source_video = data['is_source_video']
         pipe.src_imgs = data['src_imgs']
         pipe.src_infos = data['src_infos']
@@ -232,6 +239,16 @@ def run_with_video(args):
             source_images.append(args.src_image_2)
         if args.src_image_3:
             source_images.append(args.src_image_3)
+        if args.src_image_4:
+            source_images.append(args.src_image_4)
+        if args.src_image_5:
+            source_images.append(args.src_image_5)
+        if args.src_image_6:
+            source_images.append(args.src_image_6)
+        if args.src_image_7:
+            source_images.append(args.src_image_7)
+        if args.src_image_8:
+            source_images.append(args.src_image_8)
         
         # Check if multi-source mode is enabled
         multi_source_mode = len(source_images) > 1 and args.auto_switch
@@ -254,7 +271,7 @@ def run_with_video(args):
             src_img = current_source["image"]
             src_info = current_source["info"]
             last_source_index = source_manager.current_index
-        else:
+        elif not args.src_data:
             # Standard single-source mode
             ret = pipe.prepare_source(args.src_image, realtime=args.realtime)
             if not ret:
@@ -390,7 +407,7 @@ def run_with_video(args):
             if key == ord('q'):
                 break
             # Manual source switching with number keys in multi-source mode
-            elif multi_source_mode and key >= ord('1') and key <= ord('3'):
+            elif multi_source_mode and key >= ord('1') and key <= ord(str(min(source_manager.source_count, 8))):
                 source_idx = key - ord('1')
                 if source_idx < source_manager.source_count:
                     source_manager.current_index = source_idx
@@ -650,6 +667,16 @@ if __name__ == '__main__':
                         help='second source image for auto-switching')
     parser.add_argument('--src_image_3', type=str, default="",
                         help='third source image for auto-switching')
+    parser.add_argument('--src_image_4', type=str, default="",
+                        help='fourth source image for auto-switching')
+    parser.add_argument('--src_image_5', type=str, default="",
+                        help='fifth source image for auto-switching')
+    parser.add_argument('--src_image_6', type=str, default="",
+                        help='sixth source image for auto-switching')
+    parser.add_argument('--src_image_7', type=str, default="",
+                        help='seventh source image for auto-switching')
+    parser.add_argument('--src_image_8', type=str, default="",
+                        help='eighth source image for auto-switching')
     parser.add_argument('--auto_switch', action='store_true',
                         help='automatically switch between source images')
     parser.add_argument('--switch_interval', type=float, default=5.0,

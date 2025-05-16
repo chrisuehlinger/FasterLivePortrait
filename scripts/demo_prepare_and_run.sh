@@ -5,9 +5,9 @@ set -e
 
 # Configuration
 CONFIG="configs/onnx_infer.yaml"
-SRC_IMAGE="assets/examples/source/s12.jpg"
+SRC_IMAGE="assets/examples/source/ahau-kin.png"
 DRI_VIDEO="assets/examples/driving/d14.mp4"
-PREPROCESSED="s12.fsp"
+PREPROCESSED="assets/examples/source/ahau-kin.fsp"
 
 # Preprocess the source image
 python3 scripts/prepare_source.py --src "$SRC_IMAGE" --output "$PREPROCESSED" --cfg "$CONFIG"
