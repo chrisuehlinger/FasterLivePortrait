@@ -68,6 +68,7 @@ class FasterLivePortraitProcessor(BaseVideoProcessor):
         self.debug: bool = debug
         self.input_size: Tuple[int, int] = (256, 256)
         self.pipeline: Optional[FasterLivePortraitPipeline] = None
+        self.is_first_frame_after_switch: bool = True
         
         try:
             self.pipeline = FasterLivePortraitPipeline(cfg=self.config, is_animal=is_animal)
@@ -166,6 +167,7 @@ class FasterLivePortraitProcessor(BaseVideoProcessor):
         self.pipeline.R_d_0 = None
         self.pipeline.x_d_0_info = None
         self.pipeline.src_lmk_pre = None
+        self.is_first_frame_after_switch = True
         
         logger.info(f"Switched to source image {self.current_source_index + 1}: {self.src_image_paths[self.current_source_index]}")
         return self.current_source_index
@@ -221,7 +223,7 @@ class FasterLivePortraitProcessor(BaseVideoProcessor):
             # Add FPS and metadata to output frame
             if out_org is not None:
                 out_org = cv2.cvtColor(out_org, cv2.COLOR_RGB2BGR)
-
+                self.is_first_frame_after_switch = False
                 if self.debug:
                     # Create thumbnail of driving frame
                     thumbnail_height: int = int(out_org.shape[0] / 4)  # 1/4 of output height
@@ -306,7 +308,11 @@ class FasterLivePortraitProcessor(BaseVideoProcessor):
                     )
                 
                 return out_org
-            
+            elif self.is_first_frame_after_switch:
+                # If no output image is generated, return the original frame
+                logger.warning("No output image generated. Returning original frame.")
+                self.is_first_frame_after_switch = False
+                return current_src_img
             return None
             
         except RuntimeError as e:
