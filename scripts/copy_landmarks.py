@@ -56,8 +56,8 @@ def main():
     # Copy the landmarks
     print(str(result_data['src_infos'][0][0][4].shape))
     result_data['src_infos'][0][0][1] = copy.deepcopy(source_data['src_infos'][0][0][1])
-    # result_data['src_infos'][0][0][4] = copy.deepcopy(source_data['src_infos'][0][0][4])
-    # result_data['src_infos'][0][0][5] = copy.deepcopy(source_data['src_infos'][0][0][5])
+    result_data['src_infos'][0][0][4] = copy.deepcopy(source_data['src_infos'][0][0][4])
+    result_data['src_infos'][0][0][5] = copy.deepcopy(source_data['src_infos'][0][0][5])
     print(f"Copied landmarks from {args.source} to target data")
 
     # Save the resulting data

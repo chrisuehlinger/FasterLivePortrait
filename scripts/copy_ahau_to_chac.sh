@@ -3,9 +3,9 @@
 # This script demonstrates how to use the copy_landmarks.py CLI
 
 # Set paths - modify these if your files are in different locations
-SOURCE_FSP="assets/examples/source/ahau-kin.fsp"
+SOURCE_FSP="assets/examples/source/chac-bolay_with_ahau_landmarks.fsp"
 TARGET_FSP="assets/examples/source/chac-bolay.fsp"
-OUTPUT_FSP="assets/examples/source/chac-bolay_with_ahau_landmarks.fsp"
+OUTPUT_FSP="assets/examples/source/chac-bolay.fsp"
 
 # Ensure the script has proper permissions
 chmod +x scripts/copy_landmarks.py
