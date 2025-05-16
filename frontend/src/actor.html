@@ -52,13 +52,24 @@
             height: 100vh;
             white-space: nowrap;
         }
-        video {
+        .camera-feeds {
+            display: flex;
+            flex-direction: column;
             width: 67%;
             height: 100vh;
+        }
+        video {
             border-radius: 4px;
             background-color: #000;
             object-fit: contain;
             transform: scaleX(-1);
+        }
+        .camera-feed {
+            height: 50%;
+            width: 100%;
+        }
+        .inactive-camera {
+            filter: grayscale(100%);
         }
         button {
             background-color: #3498db;
@@ -151,7 +162,10 @@
 </head>
 <body>
     <div class="hud">
-        <video id="localVideo" autoplay muted playsinline></video>
+        <div class="camera-feeds">
+            <video id="localVideo1" class="camera-feed" autoplay muted playsinline></video>
+            <video id="localVideo2" class="camera-feed inactive-camera" autoplay muted playsinline></video>
+        </div>
         <img id="outputPreview">
     </div>
     
@@ -178,7 +192,16 @@
             
             <div class="status" id="stats"></div>
             
-            <!-- Add source switching controls -->
+            <!-- Add camera switching controls -->
+            <div id="cameraControls" style="margin-top: 15px; padding: 15px; background-color: #e8f4f8; border-radius: 8px;">
+                <h3>Camera Controls</h3>
+                <p>Switch between cameras:</p>
+                <button id="switchCamera1Btn">Use Top Camera</button>
+                <button id="switchCamera2Btn">Use Bottom Camera</button>
+                <p><small>Current active camera: <span id="currentCameraInfo">Top Camera</span></small></p>
+            </div>
+            
+            <!-- Source image controls -->
             <div id="sourceControls" style="display: none; margin-top: 15px; padding: 15px; background-color: #e8f4f8; border-radius: 8px;">
                 <h3>Source Image Controls</h3>
                 <p>Press number keys to switch between source images:</p>
@@ -187,10 +210,6 @@
             </div>
             
             <h3>Camera Settings</h3>
-            <div>
-                <label for="cameraSelect">Camera: </label>
-                <select id="cameraSelect"></select>
-            </div>
             <div>
                 <label for="resolutionSelect">Resolution: </label>
                 <select id="resolutionSelect">
@@ -209,7 +228,7 @@
                 <p><small>Use a simple, memorable ID to make it easier for viewers to connect</small></p>
             </div>
             <div>
-                <button id="startButton">Start Camera</button>
+                <button id="startButton">Start Cameras</button>
                 <button id="connectButton" disabled>Connect to Server</button>
                 <button id="disconnectButton" disabled>Disconnect</button>
                 <span class="loading" id="loading">Connecting...</span>
@@ -227,12 +246,12 @@
         const WS_URL = `${USE_SSL ? 'wss' : 'ws'}://${SERVER_URL}`;
         
         // Elements
-        const localVideo = document.getElementById('localVideo');
+        const localVideo1 = document.getElementById('localVideo1');
+        const localVideo2 = document.getElementById('localVideo2');
         const startButton = document.getElementById('startButton');
         const connectButton = document.getElementById('connectButton');
         const disconnectButton = document.getElementById('disconnectButton');
         const connectionStatus = document.getElementById('connectionStatus');
-        const cameraSelect = document.getElementById('cameraSelect');
         const resolutionSelect = document.getElementById('resolutionSelect');
         const frameRateInput = document.getElementById('frameRateInput');
         const viewerLink = document.getElementById('viewerLink');
@@ -242,9 +261,13 @@
         const outputPreview = document.getElementById('outputPreview');
         const previewPlaceholder = document.getElementById('previewPlaceholder');
         const previewStatus = document.getElementById('previewStatus');
+        const switchCamera1Btn = document.getElementById('switchCamera1Btn');
+        const switchCamera2Btn = document.getElementById('switchCamera2Btn');
+        const currentCameraInfo = document.getElementById('currentCameraInfo');
         
         // Global variables
-        let localStream;
+        let localStream1;
+        let localStream2;
         let websocket;
         let sessionId;
         let canvasElement;
@@ -258,6 +281,8 @@
         let statsInterval;
         let lastPreviewUpdateTime = 0;
         let previewFramesReceived = 0;
+        let activeCamera = 0; // 0 for top camera, 1 for bottom camera
+        let cameraDevices = [];
         
         // Performance metrics
         let performanceMetrics = {
@@ -289,16 +314,15 @@
         async function initializeCameras() {
             try {
                 const devices = await navigator.mediaDevices.enumerateDevices();
-                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                cameraDevices = devices.filter(device => device.kind === 'videoinput');
                 
-                cameraSelect.innerHTML = '';
-                videoDevices.forEach(device => {
-                    const option = document.createElement('option');
-                    option.value = device.deviceId;
-                    option.text = device.label || `Camera ${cameraSelect.length + 1}`;
-                    cameraSelect.appendChild(option);
-                });
-
+                console.log('Available camera devices:', cameraDevices);
+                
+                if (cameraDevices.length < 2) {
+                    connectionStatus.textContent = `Warning: Only ${cameraDevices.length} camera(s) found. At least 2 needed for full functionality.`;
+                    connectionStatus.className = 'status error';
+                }
+                
                 // Add resolution presets that match our server target
                 const resolutionSelect = document.getElementById('resolutionSelect');
                 resolutionSelect.innerHTML = ''; // Clear existing options
@@ -320,8 +344,13 @@
                     }
                     resolutionSelect.appendChild(option);
                 });
+                
+                // Now that we have the devices, directly start the cameras
+                startCamera();
             } catch (error) {
                 console.error('Error enumerating devices:', error);
+                connectionStatus.textContent = `Error accessing cameras: ${error.message}`;
+                connectionStatus.className = 'status error';
             }
         }
         
@@ -331,22 +360,54 @@
                 const [width, height] = resolutionSelect.value.split('x').map(Number);
                 const frameRate = parseInt(frameRateInput.value, 10);
                 
-                const constraints = {
+                // Stop existing streams if any
+                if (localStream1) {
+                    localStream1.getTracks().forEach(track => track.stop());
+                }
+                if (localStream2) {
+                    localStream2.getTracks().forEach(track => track.stop());
+                }
+                
+                // Select the first and third cameras (if available)
+                // First camera (index 0)
+                let camera1Id = cameraDevices[1]?.deviceId;
+                
+                // Third camera (index 2) if available, otherwise second camera (index 1)
+                let camera2Id = cameraDevices[2]?.deviceId || cameraDevices[1]?.deviceId;
+                
+                if (!camera1Id) {
+                    throw new Error("No camera devices found!");
+                }
+                
+                // Get media stream for first camera
+                localStream1 = await navigator.mediaDevices.getUserMedia({
                     audio: false,
                     video: {
-                        deviceId: cameraSelect.value ? { exact: cameraSelect.value } : undefined,
+                        deviceId: camera1Id ? { exact: camera1Id } : undefined,
                         width: { ideal: width },
                         height: { ideal: height },
                         frameRate: { ideal: frameRate }
                     }
-                };
+                });
+                localVideo1.srcObject = localStream1;
                 
-                if (localStream) {
-                    localStream.getTracks().forEach(track => track.stop());
+                // Get media stream for second camera if available
+                if (camera2Id) {
+                    localStream2 = await navigator.mediaDevices.getUserMedia({
+                        audio: false,
+                        video: {
+                            deviceId: camera2Id ? { exact: camera2Id } : undefined,
+                            width: { ideal: width },
+                            height: { ideal: height },
+                            frameRate: { ideal: frameRate }
+                        }
+                    });
+                    localVideo2.srcObject = localStream2;
+                } else {
+                    console.warn("Second camera not available");
+                    // Hide the second camera container or show a placeholder
+                    localVideo2.parentElement.style.display = 'none';
                 }
-                
-                localStream = await navigator.mediaDevices.getUserMedia(constraints);
-                localVideo.srcObject = localStream;
                 
                 // Create canvas for frame capture if it doesn't exist
                 if (!canvasElement) {
@@ -354,24 +415,57 @@
                     canvasCtx = canvasElement.getContext('2d');
                 }
                 
-                // Set canvas size based on video tracks
-                const videoTrack = localStream.getVideoTracks()[0];
+                // Set canvas size based on video tracks from first camera
+                const videoTrack = localStream1.getVideoTracks()[0];
                 const settings = videoTrack.getSettings();
                 canvasElement.width = settings.width;
                 canvasElement.height = settings.height;
                 
-                connectionStatus.textContent = 'Camera ready. Click "Connect to Server" to begin streaming.';
+                // Update UI for initial active camera
+                updateActiveCameraUI();
+                
+                connectionStatus.textContent = 'Cameras ready. Click "Connect to Server" to begin streaming.';
                 connectionStatus.className = 'status success';
                 connectButton.disabled = false;
                 
-                // If we haven't initialized cameras with labels yet, do it now
-                if (cameraSelect.options.length === 0 || !cameraSelect.options[0].text) {
-                    initializeCameras();
-                }
             } catch (error) {
                 console.error('Error accessing media devices:', error);
                 connectionStatus.textContent = `Camera error: ${error.message}`;
                 connectionStatus.className = 'status error';
+            }
+        }
+        
+        // Update UI to indicate which camera is active
+        function updateActiveCameraUI() {
+            if (activeCamera === 0) {
+                // Top camera is active
+                localVideo1.classList.remove('inactive-camera');
+                localVideo2.classList.add('inactive-camera');
+                currentCameraInfo.textContent = 'Top Camera';
+                switchCamera1Btn.disabled = true;
+                switchCamera2Btn.disabled = false;
+            } else {
+                // Bottom camera is active
+                localVideo1.classList.add('inactive-camera');
+                localVideo2.classList.remove('inactive-camera');
+                currentCameraInfo.textContent = 'Bottom Camera';
+                switchCamera1Btn.disabled = false;
+                switchCamera2Btn.disabled = true;
+            }
+        }
+        
+        // Switch active camera
+        function switchActiveCamera(index) {
+            activeCamera = index;
+            updateActiveCameraUI();
+            
+            // If connected to server, notify about camera switch
+            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                const command = {
+                    action: "camera_switched",
+                    index: index
+                };
+                websocket.send(JSON.stringify(command));
             }
         }
         
@@ -406,6 +500,7 @@
                 window.disconnect = disconnect;
                 window.switchSource = switchSource;
                 window.handleKeyPress = handleKeyPress;
+                window.switchActiveCamera = switchActiveCamera;
                 
                 // Setup the websocket handler with custom handlers
                 websocket = setupWebSocketHandler(ws, {
@@ -438,6 +533,13 @@
                                 // Setup source switching UI
                                 setupSourceSwitching(sourcesAvailable);
                             }
+                        }
+                    },
+                    onSwitchCamera: (data) => {
+                        // Handle camera switch request from server
+                        console.log('Switching camera based on server request:', data);
+                        if (data.index === 0 || data.index === 1) {
+                            switchActiveCamera(data.index);
                         }
                     }
                 });
@@ -496,13 +598,18 @@
                     const data = e.detail.data;
                     if (typeof data === 'string') {
                         bytesReceived += data.length;
+                        
+                        // Check for camera switching message
+                        try {
+                            const parsedData = JSON.parse(data);
+                            if (parsedData.action === "switch_camera" && 
+                                (parsedData.index === 0 || parsedData.index === 1)) {
+                                switchActiveCamera(parsedData.index);
+                            }
+                        } catch (err) {
+                            // Not JSON or not relevant
+                        }
                     }
-                });
-                
-                document.addEventListener('websocket:source_switched', (e) => {
-                    console.log(`Server confirmed switch to source ${e.detail.sourceIndex + 1}: ${e.detail.sourceName}`);
-                    // Use sourceIndex for UI updates
-                    updateSourceUI(e.detail.sourceIndex);
                 });
                 
             } catch (error) {
@@ -623,9 +730,12 @@
                 
                 performanceMetrics.blockedByNetwork = false;
                 
+                // Select the active camera stream
+                const activeStream = activeCamera === 0 ? localVideo1 : localVideo2;
+                
                 // Measure draw time
                 const drawStartTime = performance.now();
-                canvasCtx.drawImage(localVideo, 0, 0, canvasElement.width, canvasElement.height);
+                canvasCtx.drawImage(activeStream, 0, 0, canvasElement.width, canvasElement.height);
                 const drawEndTime = performance.now();
                 addMetric(performanceMetrics.drawTime, drawEndTime - drawStartTime);
                 
@@ -701,7 +811,6 @@
         // Handle keyboard events for source switching
         function handleKeyPress(event) {
             if (event.key === ' ') {
-                console.log('HEYO')
                 event.preventDefault(); // Prevent default space key behavior
                 connectToServer();
             }
@@ -775,11 +884,8 @@
             
             // Show the controls
             sourceControls.style.display = 'block';
-            
-            // Register key handler
         }
-        document.addEventListener('keydown', handleKeyPress);
-
+        
         // Collect and display connection stats
         function startStatsCollection() {
             if (statsInterval) {
@@ -838,7 +944,8 @@ Network Status:
 - Theoretical Max FPS: ${(1000 / avgTotalTime).toFixed(1)}
 
 Camera Input: ${canvasElement.width}x${canvasElement.height} @ ${framesPerSecond}fps
-Compression Quality: 70%`;
+Active Camera: ${activeCamera === 0 ? 'Top' : 'Bottom'}
+Compression Quality: 50%`;
 
                 detailedStatsContainer.textContent = detailedReport;
                 
@@ -865,6 +972,8 @@ Compression Quality: 70%`;
         startButton.addEventListener('click', startCamera);
         connectButton.addEventListener('click', connectToServer);
         disconnectButton.addEventListener('click', disconnect);
+        switchCamera1Btn.addEventListener('click', () => switchActiveCamera(0));
+        switchCamera2Btn.addEventListener('click', () => switchActiveCamera(1));
         
         // Initialize cameras when page loads
         window.addEventListener('DOMContentLoaded', () => {
@@ -884,14 +993,12 @@ Compression Quality: 70%`;
             if (sessionFromUrl) {
                 sessionIdInput.value = sessionFromUrl;
             }
-            startCamera();
         });
         
         // Handle page unload
         window.addEventListener('beforeunload', () => {
             disconnect();
         });
-
     </script>
 </body>
 </html>
