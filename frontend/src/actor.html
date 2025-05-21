@@ -371,10 +371,11 @@
                 
                 // Select the first and third cameras (if available)
                 // First camera (index 0)
-                let camera1Id = cameraDevices[1]?.deviceId;
+                let camera1Id = (cameraDevices.find((device) => device.label.indexOf('Razer Kiyo Pro') !== -1) || cameraDevices[0])?.deviceId;
                 
                 // Third camera (index 2) if available, otherwise second camera (index 1)
-                let camera2Id = cameraDevices[2]?.deviceId || cameraDevices[1]?.deviceId;
+                // let camera2Id = (cameraDevices.find((device) => device.label.indexOf('Dell Webcam WB7022') !== -1) || cameraDevices[2] || cameraDevices[1])?.deviceId;
+                let camera2Id = (cameraDevices.find((device) => device.label.indexOf('FaceTime HD Camera') !== -1) || cameraDevices[2] || cameraDevices[1])?.deviceId;
                 
                 if (!camera1Id) {
                     throw new Error("No camera devices found!");
