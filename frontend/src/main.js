@@ -725,6 +725,7 @@ function animate() {
     requestAnimationFrame(animate);
     
     // Update time uniforms for animations
+    const delta = clock.getDelta();
     const currentTime = clock.getElapsedTime();
     
     // Update the time uniform for the Perlin noise shader
@@ -741,7 +742,8 @@ function animate() {
     
     // Update background turbulent displacement time
     if (backgroundMaterial && backgroundMaterial.uniforms.time) {
-        backgroundMaterial.uniforms.time.value = currentTime;
+        backgroundMaterial.uniforms.time.value += delta * (currentBackgroundIndex ===2 ? (1 + 100*animationIntensity) : 1);
+        backgroundMaterial.uniforms.turbulenceFrequency.value = 1.5 + (currentBackgroundIndex ===2 ? 25 : 0 ) * animationIntensity;
     }
     
     // Handle transition effect
