@@ -75,17 +75,36 @@ function createShader(fragmentShader, vertexShader = baseVertexShaderSource, uni
   };
 }
 
+let animationIntensity = 1;
+let currentSourceIndex = 2;
+
+document.addEventListener('websocket:source_switched', (e) => {
+    console.log('FIRESIM Received source_switched message:', e.detail);
+    currentSourceIndex = e.detail.sourceIndex;
+});
+
+document.addEventListener('websocket:intensity_update', (e) => {
+    console.log('FIRESIM Received intensity_update message:', e.detail);
+    animationIntensity = e.detail.intensity;
+});
+
 export function makeFireSimulation() {
-  // Create canvas and append to document
+  // Create container div and canvas
+  const container = document.createElement('div');
+  container.style.position = 'fixed';
+  container.style.top = '0';
+  container.style.left = '0';
+  container.style.width = '100%';
+  container.style.height = '100%';
+  container.style.display = 'flex';
+  container.style.alignItems = 'center';
+  container.style.justifyContent = 'center';
+  container.style.zIndex = '100';
+  container.style.pointerEvents = 'none';
+  
   const canvas = document.createElement('canvas');
-  canvas.style.position = 'fixed';
-  canvas.style.top = '0';
-  canvas.style.left = '0';
-  canvas.style.width = '100%';
-  canvas.style.height = '100%';
-  canvas.style.zIndex = '100'; // Put in front of other content
-  canvas.style.pointerEvents = 'none'; // Don't interfere with page interactions
-  document.body.appendChild(canvas);
+  container.appendChild(canvas);
+  document.body.appendChild(container);
 
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   const renderer = new THREE.WebGLRenderer({ 
@@ -119,19 +138,19 @@ export function makeFireSimulation() {
 
 
   let config = {
-    BUOYANCY: 0.1,
+    BUOYANCY: 0.1,// 0.2,
     BURN_TEMPERATURE: 1700,
     CONFINEMENT: 15,
     COOLING: 3000,
     DISPLAY_MODE: 0,
-    DYE_RESOLUTION: 1024,
-    FUEL_DISSIPATION: 0.75,
+    DYE_RESOLUTION: 1024, //512,
+    FUEL_DISSIPATION: 0.92,
     DENSITY_DISSIPATION: 0.99,
     NOISE_BLENDING: 0.5,
     NOISE_VOLATILITY: 0.1,
     PRESSURE_DISSIPATION: 0.8,
     PRESSURE_ITERATIONS: 20,
-    SIM_RESOLUTION: 512,
+    SIM_RESOLUTION: 512, //256,
     SPLAT_RADIUS: 1.5,
     VELOCITY_DISSIPATION: 0.98,
   };
@@ -282,9 +301,26 @@ export function makeFireSimulation() {
   }
 
   function update () {
+    config = {
+      BUOYANCY: 0.2, // 0.2,
+      BURN_TEMPERATURE: 1700, // 1700,
+      CONFINEMENT: 15, // 15,
+      COOLING: 300, // 3000,
+      DISPLAY_MODE: 0,
+      DYE_RESOLUTION: 1024, //512,
+      FUEL_DISSIPATION: 0.992, // 0.92,
+      DENSITY_DISSIPATION: 0.99, // 0.99,
+      NOISE_BLENDING: 0.15, // 0.5,
+      NOISE_VOLATILITY: 0.1, // 0.1,
+      PRESSURE_DISSIPATION: 0.8, // 0.8,
+      PRESSURE_ITERATIONS: 20, // 20,
+      SIM_RESOLUTION: 512, //256,
+      SPLAT_RADIUS: 1.5, // 1.5,
+      VELOCITY_DISSIPATION: 1, // 0.98,
+    }
     resizeCanvas();
     input();
-    step(0.016); // Consider using THREE.Clock for delta time
+    step(clock.getDelta());
     render();
     requestAnimationFrame(update);
   }
@@ -298,8 +334,9 @@ export function makeFireSimulation() {
       y: config.SIM_RESOLUTION,
       uTarget: fuel.read.texture,
       useMax: true,
-      time: clock.getElapsedTime(),
-      uImage: imageTexture // Pass the THREE.Texture object
+      time: (Date.now() / 1000) % 86400,
+      uImage: imageTexture, // Pass the THREE.Texture object
+      fuelIntensity: animationIntensity,
     });
     renderPassToTarget(rowProgram, fuel.write.fbo);
     fuel.swap();
@@ -432,7 +469,7 @@ export function makeFireSimulation() {
   function loadImageTexture() {
     const textureLoader = new THREE.TextureLoader();
     const texture = textureLoader.load(
-      './chac-bolay-white-on-black.png',
+      '/frontend/images/chac-bolay-white-on-black.png',
       (loadedTexture) => {
         // Get the actual image aspect ratio
         imageAspectRatio = loadedTexture.image.width / loadedTexture.image.height;

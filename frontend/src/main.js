@@ -4,6 +4,9 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { makeFireSimulation } from './fire';
+
+makeFireSimulation();
 // websocket-handler.js is imported in viewer.html and exposed via window
 
 // Configuration
@@ -742,8 +745,8 @@ function animate() {
     
     // Update background turbulent displacement time
     if (backgroundMaterial && backgroundMaterial.uniforms.time) {
-        backgroundMaterial.uniforms.time.value += delta * (currentBackgroundIndex ===2 ? (1 + 100*animationIntensity) : 1);
-        backgroundMaterial.uniforms.turbulenceFrequency.value = 1.5 + (currentBackgroundIndex ===2 ? 25 : 0 ) * animationIntensity;
+        backgroundMaterial.uniforms.time.value = (Date.now() / 1000) % 86400 //* (currentBackgroundIndex ===2 ? (1 + 100*animationIntensity) : 1);
+        // backgroundMaterial.uniforms.turbulenceFrequency.value = 1.5 + (currentBackgroundIndex ===2 ? 25 : 0 ) * animationIntensity;
     }
     
     // Handle transition effect
@@ -977,3 +980,5 @@ window.addEventListener('beforeunload', () => {
 
 // Initialize the application
 initialize();
+switchBackground(2);
+setTimeout(onWindowResize, 500); // Delay to allow for initial setup
