@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
+import * as dat from 'dat.gui';
 import addNoiseShaderSource from "./shaders/addNoiseShader.glsl?raw";
 import advectionManualFilteringShaderSource from "./shaders/advectionManualFilteringShader.glsl?raw";
 import advectionShaderSource from "./shaders/advectionShader.glsl?raw";
@@ -75,8 +76,8 @@ function createShader(fragmentShader, vertexShader = baseVertexShaderSource, uni
   };
 }
 
-let animationIntensity = 1;
-let currentSourceIndex = 2;
+let animationIntensity = 0;
+let currentSourceIndex = 3;
 
 document.addEventListener('websocket:source_switched', (e) => {
     console.log('FIRESIM Received source_switched message:', e.detail);
@@ -99,7 +100,7 @@ export function makeFireSimulation() {
   container.style.display = 'flex';
   container.style.alignItems = 'center';
   container.style.justifyContent = 'center';
-  container.style.zIndex = '100';
+  // container.style.zIndex = '100';
   container.style.pointerEvents = 'none';
   
   const canvas = document.createElement('canvas');
@@ -144,10 +145,10 @@ export function makeFireSimulation() {
     COOLING: 3000,
     DISPLAY_MODE: 0,
     DYE_RESOLUTION: 1024, //512,
-    FUEL_DISSIPATION: 0.92,
+    FUEL_DISSIPATION: 0.99,// 0.92,
     DENSITY_DISSIPATION: 0.99,
-    NOISE_BLENDING: 0.5,
-    NOISE_VOLATILITY: 0.1,
+    NOISE_BLENDING: 1, // 0.5,
+    NOISE_VOLATILITY: 1, // 0.1,
     PRESSURE_DISSIPATION: 0.8,
     PRESSURE_ITERATIONS: 20,
     SIM_RESOLUTION: 512, //256,
@@ -155,6 +156,26 @@ export function makeFireSimulation() {
     VELOCITY_DISSIPATION: 0.98,
   };
   let DISPLAY_MODES = ["Normal", "DebugFire", "DebugTemperature", "DebugFuel", "DebugPressure", "DebugDensity", "DebugNoise"];
+
+  // Create dat.GUI
+  // const gui = new dat.GUI();
+  // // Resolution controls that require framebuffer reinitialization
+  // const resolutionFolder = gui.addFolder('Resolution (requires restart)');
+  // resolutionFolder.add(config, 'SIM_RESOLUTION', 128, 1024, 64).name('Sim Resolution');
+  // resolutionFolder.add(config, 'DYE_RESOLUTION', 256, 2048, 128).name('Dye Resolution');
+  // resolutionFolder.close();
+  // gui.add(config, 'BUOYANCY', 0, 2, 0.01).name('Buoyancy');
+  // gui.add(config, 'BURN_TEMPERATURE', 0, 5000, 50).name('Burn Temperature');
+  // gui.add(config, 'CONFINEMENT', 0, 100, 1).name('Confinement');
+  // gui.add(config, 'COOLING', 0, 5000, 100).name('Cooling');
+  // gui.add(config, 'FUEL_DISSIPATION', 0, 2, 0.01).name('Fuel Dissipation');
+  // gui.add(config, 'DENSITY_DISSIPATION', 0, 2, 0.01).name('Density Dissipation');
+  // gui.add(config, 'NOISE_BLENDING', 0, 2, 0.01).name('Noise Blending');
+  // gui.add(config, 'NOISE_VOLATILITY', 0, 2, 0.01).name('Noise Volatility');
+  // gui.add(config, 'PRESSURE_DISSIPATION', 0, 2, 0.01).name('Pressure Dissipation');
+  // gui.add(config, 'PRESSURE_ITERATIONS', 1, 50, 1).name('Pressure Iterations');
+  // gui.add(config, 'VELOCITY_DISSIPATION', 0, 2, 0.01).name('Velocity Dissipation');
+  
 
   let simWidth;
   let simHeight;
@@ -301,23 +322,8 @@ export function makeFireSimulation() {
   }
 
   function update () {
-    config = {
-      BUOYANCY: 0.2, // 0.2,
-      BURN_TEMPERATURE: 1700, // 1700,
-      CONFINEMENT: 15, // 15,
-      COOLING: 300, // 3000,
-      DISPLAY_MODE: 0,
-      DYE_RESOLUTION: 1024, //512,
-      FUEL_DISSIPATION: 0.992, // 0.92,
-      DENSITY_DISSIPATION: 0.99, // 0.99,
-      NOISE_BLENDING: 0.15, // 0.5,
-      NOISE_VOLATILITY: 0.1, // 0.1,
-      PRESSURE_DISSIPATION: 0.8, // 0.8,
-      PRESSURE_ITERATIONS: 20, // 20,
-      SIM_RESOLUTION: 512, //256,
-      SPLAT_RADIUS: 1.5, // 1.5,
-      VELOCITY_DISSIPATION: 1, // 0.98,
-    }
+    // Remove the config reassignment since we're using dat.gui now
+    config.FUEL_DISSIPATION = 0.99 + (currentSourceIndex == 2 ? Math.pow(Math.max(animationIntensity-0.9,0),1) : 0.0)
     resizeCanvas();
     input();
     step(clock.getDelta());
@@ -336,7 +342,7 @@ export function makeFireSimulation() {
       useMax: true,
       time: (Date.now() / 1000) % 86400,
       uImage: imageTexture, // Pass the THREE.Texture object
-      fuelIntensity: animationIntensity,
+      fuelIntensity: currentSourceIndex == 2 ? (1-Math.pow(1-animationIntensity,2)) : 0.0,
     });
     renderPassToTarget(rowProgram, fuel.write.fbo);
     fuel.swap();

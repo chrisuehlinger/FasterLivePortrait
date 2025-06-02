@@ -113,7 +113,7 @@ void main() {
   vec3 texColor = texture2D(uImage, displacedUv).rgb;
 
   if(useMax) {
-    gl_FragColor = vec4(max(base, texColor * fuelIntensity) , 1.0);
+    gl_FragColor = vec4(max(base, texColor) * fuelIntensity , 1.0);
   } else {
     gl_FragColor = vec4(base + texColor, 1.0);
   }

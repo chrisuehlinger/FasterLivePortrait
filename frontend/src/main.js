@@ -980,5 +980,4 @@ window.addEventListener('beforeunload', () => {
 
 // Initialize the application
 initialize();
-switchBackground(2);
 setTimeout(onWindowResize, 500); // Delay to allow for initial setup
